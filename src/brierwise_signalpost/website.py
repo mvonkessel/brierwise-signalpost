@@ -36,6 +36,7 @@ PAGE_HINTS = {
 GENERIC_MAIL = re.compile(r"^(post|postmottak|firmapost|info|kontakt|contact|salg|sales|office|kontor|mail|hello|"
                           r"hei|support|kundeservice|service|booking|bestilling|order|ordre|faktura|invoice|regnskap|"
                           r"admin|resepsjon|sentralbord)@", re.I)
+ORG_CONTEXT = re.compile(r"(org|foretak|mva|vat|company|registr|reg\.|nr\.|enhetsreg)", re.I)
 DATE_RE = re.compile(r"\b(20[0-3]\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])")
 
 
@@ -302,6 +303,10 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
                 if len(site.pages) >= 4:
                     break
         named = bool(tokens) and all(t in fold(page.title + " " + page.text[:20000]) for t in tokens[:3])
+        if proof_snap and not ORG_CONTEXT.search(proof_span or ""):
+            proof_snap = None                          # a bare nine-digit number without «org.nr», «MVA» and the like
+        if proof_snap and origin == "name_guess" and not named:
+            proof_snap = None                          # a directory or portal can list many numbers: need the name too
         if proof_snap:
             proof, conf, state = "organisation number shown on the site", 0.99, "available"
         elif origin in DECLARED and same_domain and named:

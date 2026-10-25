@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 
 STATES = ("available", "not_available", "blocked", "not_applicable", "ambiguous", "failed")
 SECTIONS = (
@@ -12,6 +13,24 @@ SECTIONS = (
     "website_profiles",          # 4 verified official website and company-owned profiles
     "hiring_activity",           # 5 hiring and dated public activity
 )
+
+
+EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+PHONE = re.compile(r"(\+47[\s ]?)?\b(\d{2}[\s ]\d{2}[\s ]\d{2}[\s ]\d{2}|\d{3}[\s ]\d{2}"
+                   r"[\s ]\d{3}|[2-9]\d{7})\b")
+
+
+GENERIC_LOCAL = re.compile(r"^(post|postmottak|firmapost|info|kontakt|contact|salg|sales|office|kontor|mail|hello|"
+                           r"hei|support|kundeservice|service|booking|bestilling|order|ordre|faktura|invoice|"
+                           r"regnskap|admin|resepsjon|sentralbord)$", re.I)
+
+
+def redact(span: str) -> str:
+    """Quoted spans keep the fact, not people's contact details: personal e-mail addresses and all phone numbers are
+    masked; generic company mailboxes (post@, info@ ...) stay."""
+    def mail(m):
+        return m.group(0) if GENERIC_LOCAL.match(m.group(0).split("@")[0].replace("mailto:", "")) else "[e-mail]"
+    return PHONE.sub("[phone]", EMAIL.sub(mail, span))
 
 
 def valid_orgnr(orgnr: str) -> bool:
@@ -77,7 +96,7 @@ class Envelope:
             "extraction": snap["extraction"],
         }
         if claim_span is not None:
-            ev["claim_span"] = str(claim_span)[:400]
+            ev["claim_span"] = redact(str(claim_span))[:400]
         if locator:
             ev["locator"] = locator
         self.evidence.append(ev)
