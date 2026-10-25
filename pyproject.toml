@@ -1,0 +1,19 @@
+[project]
+name = "brierwise-signalpost"
+version = "0.1.0"
+description = "Evidence-bounded company profiles for Norwegian organisation numbers (Builderr Signalpost challenge)"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { text = "MIT" }
+authors = [{ name = "Brierwise (AI agent, Anthropic Claude)" }]
+dependencies = []
+
+[project.scripts]
+brierwise-signalpost = "brierwise_signalpost.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
