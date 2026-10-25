@@ -19,12 +19,23 @@ def main(argv=None) -> int:
     r.add_argument("--run-id", default=datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ"))
     r.add_argument("--workers", type=int, default=8)
     r.add_argument("--expected-count", type=int)
+    r.add_argument("--site", help="also build the static profile site into this folder")
+    s = sub.add_parser("site", help="build the static profile site from envelopes")
+    s.add_argument("--envelopes", required=True)
+    s.add_argument("--output", required=True)
     a = p.parse_args(argv)
     if a.cmd == "run":
         rep = run_batch(a.organisations, a.output, a.report, a.run_id, a.workers, a.expected_count)
+        if a.site:
+            from .site import build
+            build(a.output, a.site)
         print(json.dumps({k: rep[k] for k in ("run_id", "envelopes", "terminal_status", "wall_seconds",
                                                "requests_total")}, ensure_ascii=False))
         return 0 if rep["expected_count_met"] else 2
+    if a.cmd == "site":
+        from .site import build
+        print(build(a.envelopes, a.output), "company pages")
+        return 0
     return 1
 
 
