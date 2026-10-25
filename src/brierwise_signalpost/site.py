@@ -71,9 +71,14 @@ def value_text(v) -> str:
                 " <span class=mut>%s</span>" % e(v.get("published") or v.get("date"))
         if "role" in v:
             return "%s: %s" % (e(v["role"]), e(v["name"]))
-        return e(", ".join("%s: %s" % (k, x) for k, x in v.items() if x not in (None, "", [])))
+        if set(v) <= {"code", "label"} and v.get("label"):
+            return "%s (%s)" % (e(v["label"]), e(v.get("code")))
+        if set(v) <= {"name", "number"} and v.get("name"):
+            return "%s (%s)" % (e(str(v["name"]).title()), e(v.get("number")))
+        return e(", ".join("%s: %s" % (k.replace("_", " "), x) for k, x in v.items() if x not in (None, "", [])))
     if isinstance(v, list):
-        return e("; ".join(x.get("label") or x.get("name") or str(x) if isinstance(x, dict) else str(x) for x in v))
+        return e("; ".join(("%s (%s)" % (x.get("label"), x.get("code")) if x.get("code") and x.get("label") else
+                            x.get("label") or x.get("name") or str(x)) if isinstance(x, dict) else str(x) for x in v))
     if isinstance(v, str) and v.startswith("http"):
         return '<a href="%s" rel="nofollow noopener">%s</a>' % (e(v), e(v))
     return e(v)
@@ -139,11 +144,12 @@ function draw(){const t=q.value.trim().toLowerCase();let n=0;const rows=[];for(c
 (x.m||'')+' '+(x.i||'')).toLowerCase().includes(t))continue;let ok=true;for(const f of on)if(!F[f](x))ok=false;
 if(!ok)continue;if(++n>400)break;rows.push(`<div class="card item"><input type=checkbox aria-label="compare ${x.n}"
  ${sel.has(x.o)?'checked':''} onchange="tog('${x.o}',this.checked)"><div><a href="company/${x.o}.html">${esc(x.n)}</a>
-<div class=mut>${x.o} · ${x.f||''} · ${esc((x.m||'').toLowerCase())} · ${esc(x.i||'')}</div></div><div class=num>${
+<div class=mut>${x.o} · ${x.f||''} · ${esc(tc(x.m||''))} · ${esc(x.i||'')}</div></div><div class=num>${
 x.r!=null?'NOK '+nf.format(Math.round(x.r/1e3))+'k':''}<div class=mut>${x.w?'website':''}${x.j?' · '+x.j+' jobs':''}
 </div></div></div>`)}list.innerHTML=rows.join('')||'<p class=mut>No company matches.</p>';
 document.getElementById('cnt').textContent=n>400?'first 400 shown':n+' shown'}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
+function tc(s){return String(s).toLowerCase().replace(/(^|[\\s-])\\S/g,c=>c.toUpperCase())}
 function tog(o,c){c?sel.add(o):sel.delete(o);cmp.disabled=sel.size<2||sel.size>4}
 cmp.addEventListener('click',()=>location.href='compare.html#'+[...sel].join(','));q.addEventListener('input',draw);draw();
 """
@@ -151,9 +157,10 @@ cmp.addEventListener('click',()=>location.href='compare.html#'+[...sel].join(','
 COMPARE_JS = """
 const D=window.SIGNALPOST;const ids=location.hash.slice(1).split(',');const X=D.filter(x=>ids.includes(x.o));
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function tc(s){return String(s).toLowerCase().replace(/(^|[\\s-])\\S/g,c=>c.toUpperCase())}
 const url=u=>/^https?:\\/\\//i.test(u||'')?esc(u):'';
 const nf=new Intl.NumberFormat('en');const rows=[['Organisation number',x=>esc(x.o)],['Legal form',x=>esc(x.f||'')],
-['Municipality',x=>esc((x.m||'').toLowerCase())],['Industry',x=>esc(x.i||'')],['Status',x=>esc(x.s||'')],
+['Municipality',x=>esc(tc(x.m||''))],['Industry',x=>esc(x.i||'')],['Status',x=>esc(x.s||'')],
 ['Revenue (latest)',x=>x.r!=null?'NOK '+nf.format(x.r):'not found'],['Registered employees',x=>esc(x.e??'not published')],
 ['Website',x=>url(x.w)?`<a href="${url(x.w)}" rel="nofollow noopener">${url(x.w)}</a>`:'not verified'],
 ['Own profiles',x=>esc(x.p)],['Active Nav job ads',x=>esc(x.j)]];
