@@ -124,7 +124,10 @@ class Client:
         if delay > 0:
             time.sleep(delay)
 
-    def get(self, url: str, accept: str = "*/*", headers: dict | None = None, check_url: bool = True) -> Response:
+    def get(self, url: str, accept: str = "*/*", headers: dict | None = None, check_url: bool = True,
+            timeout: float | None = None, retries: int | None = None) -> Response:
+        timeout = self.timeout if timeout is None else timeout
+        retries = self.retries if retries is None else retries
         if check_url:
             reason = safe_url(url)
             if reason:
@@ -133,14 +136,14 @@ class Client:
         head = {"User-Agent": USER_AGENT, "Accept": accept, "Accept-Encoding": "gzip, deflate"}
         head.update(headers or {})
         last = None
-        for attempt in range(self.retries + 1):
+        for attempt in range(retries + 1):
             self._wait(host)
             t0 = time.monotonic()
             with self._lock:
                 self.requests[host] += 1
             try:
                 req = urllib.request.Request(url, headers=head)
-                with self._opener.open(req, timeout=self.timeout) as r:
+                with self._opener.open(req, timeout=timeout) as r:
                     body = r.read(self.max_bytes + 1)[: self.max_bytes]
                     hdrs = dict(r.headers.items())
                     body = _decompress(body, hdrs.get("Content-Encoding", ""))
@@ -159,12 +162,12 @@ class Client:
                     break
                 retry_after = hdrs.get("Retry-After", "")
                 pause = float(retry_after) if retry_after.isdigit() else 1.5 * (attempt + 1)
-                if attempt < self.retries:
+                if attempt < retries:
                     time.sleep(min(pause, 10.0))
             except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError) as e:
                 last = Response(url, url, 0, {}, b"", now_iso(), "network: %s" % str(e)[:160],
                                 int((time.monotonic() - t0) * 1000))
-                if attempt < self.retries:
+                if attempt < retries:
                     time.sleep(1.0 * (attempt + 1))
         with self._lock:
             self.failures[host] += 1

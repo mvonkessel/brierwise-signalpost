@@ -43,6 +43,7 @@ class Envelope:
         self.errors: list[dict] = []
         self.changes: list[dict] = []
         self.sources: list[dict] = []          # source snapshots: one per fetched document
+        self.legal_name: str | None = None
         self._ev_index: dict[tuple, str] = {}
 
     # evidence ---------------------------------------------------------------------------------------------------------

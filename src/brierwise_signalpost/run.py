@@ -13,6 +13,7 @@ from . import AGENT_NAME, __version__
 from .http import Client, now_iso
 from .model import Envelope, SECTIONS, valid_orgnr
 from .official import official
+from .website import extract_site, find_website
 
 
 class CountingClient:
@@ -67,7 +68,11 @@ def research(client: Client, orgnr: str, run_id: str) -> dict:
                 env.claim(sec, "organisation_number", None, [], "not_applicable",
                           note="input is not a valid Norwegian organisation number")
         else:
-            official(cc, env)
+            off = official(cc, env)
+            if off["entity"] is not None:
+                found = find_website(cc, env, off["entity"])
+                if found.get("status") == "available":
+                    extract_site(cc, env, found)
     except Exception as exc:                       # one broken company must not break the batch
         status = "failed"
         env.error("agent", "%s: %s" % (type(exc).__name__, exc))

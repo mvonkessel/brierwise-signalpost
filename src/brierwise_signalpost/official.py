@@ -53,6 +53,8 @@ def fetch_entity(client, env: Envelope) -> dict | None:
         env.claim("legal_identity", "legal_name", None, [env.cite(snap)], "failed")
         return None
 
+    env.legal_name = e.get("navn")
+
     def add(field, value, span=None, **kw):
         if value in (None, "", [], {}):
             return
