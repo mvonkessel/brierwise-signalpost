@@ -14,6 +14,7 @@ from .http import Client, now_iso
 from .model import Envelope, SECTIONS, valid_orgnr
 from .jobs import NavIndex, jobs
 from .official import official
+from .refresh import compare, load_previous
 from .synthesis import synthesize
 from .website import extract_site, find_website
 
@@ -93,8 +94,10 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
 
 
 def run_batch(organisations: str, output: str, report: str, run_id: str, workers: int = 8,
-              expected_count: int | None = None, checkpoint: str | None = None, nav_days: int = 45) -> dict:
+              expected_count: int | None = None, checkpoint: str | None = None, nav_days: int = 45,
+              previous: str | None = None) -> dict:
     orgs, duplicates = load_batch(organisations)
+    prev = load_previous(previous)
     for path in (output, report):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     started = now_iso()
@@ -126,6 +129,11 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
                        "sections": {s: "failed" for s in SECTIONS}, "claims": [], "evidence": [],
                        "source_snapshots": [], "changes": [], "errors": [{"stage": "runner", "message": str(exc)}],
                        "operations": {"requests": 0, "runtime_ms": 0, "third_party_cost_usd": 0}}
+            p = prev.get(o)
+            env["changes"], env["history"] = compare(p, env)
+            env["refresh"] = {"previous_run_id": (p or {}).get("run", {}).get("run_id"),
+                              "previous_completed_at": (p or {}).get("run", {}).get("completed_at"),
+                              "material_changes": len(env["changes"]), "first_run": p is None}
             with lock:
                 done[o] = env
                 ck.write(json.dumps(env, ensure_ascii=False) + "\n")

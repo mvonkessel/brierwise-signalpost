@@ -20,12 +20,15 @@ def main(argv=None) -> int:
     r.add_argument("--workers", type=int, default=8)
     r.add_argument("--expected-count", type=int)
     r.add_argument("--site", help="also build the static profile site into this folder")
+    r.add_argument("--previous", help="envelopes of the previous run (JSONL): changes and history are derived from it")
+    r.add_argument("--nav-days", type=int, default=45, help="Nav job feed window in days (0 switches it off)")
     s = sub.add_parser("site", help="build the static profile site from envelopes")
     s.add_argument("--envelopes", required=True)
     s.add_argument("--output", required=True)
     a = p.parse_args(argv)
     if a.cmd == "run":
-        rep = run_batch(a.organisations, a.output, a.report, a.run_id, a.workers, a.expected_count)
+        rep = run_batch(a.organisations, a.output, a.report, a.run_id, a.workers, a.expected_count,
+                        nav_days=a.nav_days, previous=a.previous)
         if a.site:
             from .site import build
             build(a.output, a.site)
