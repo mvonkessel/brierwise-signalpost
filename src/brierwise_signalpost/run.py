@@ -14,6 +14,7 @@ from .http import Client, now_iso
 from .model import Envelope, SECTIONS, valid_orgnr
 from .jobs import NavIndex, jobs
 from .official import official
+from .synthesis import synthesize
 from .website import extract_site, find_website
 
 
@@ -82,6 +83,10 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
     env.run["completed_at"] = now_iso()
     env.run["terminal_status"] = status
     out = env.to_dict()
+    try:
+        out["synthesis"] = synthesize(env)
+    except Exception as exc:
+        out["synthesis"] = {"sentences": [], "error": "%s: %s" % (type(exc).__name__, exc)}
     out["operations"] = {"requests": cc.requests, "runtime_ms": int((time.monotonic() - t0) * 1000),
                          "third_party_cost_usd": 0}
     return out

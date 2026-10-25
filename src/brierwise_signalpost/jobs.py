@@ -148,7 +148,12 @@ def jobs(client, env: Envelope, index: NavIndex, entity: dict, subunits: list[di
         if emp.get("homepage"):
             homepages.append((emp.get("homepage"), snap))
     if found == 0:
-        env.claim("hiring_activity", "job_postings", None, [], "not_available",
+        ev = []
+        if index.snapshot is not None:
+            snap = env.snapshot(index.snapshot, "official_job_feed", "nav_feed_page")
+            ev = [env.cite(snap, "first feed page of %d read in this run (changes since %d days ago)" %
+                           (index.pages, index.days), "nav feed")]
+        env.claim("hiring_activity", "job_postings", None, ev, "not_available",
                   note="no active ad with this organisation number among %d ads changed in the last %d days on Nav's "
                        "official feed (%d name matches checked)" % (len({u for v in index.by_name.values() for u in v}),
                                                                      index.days, checked))
