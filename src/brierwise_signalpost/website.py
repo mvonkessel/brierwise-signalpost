@@ -238,6 +238,45 @@ class Site:
         return self.pages[url]
 
 
+BRAVE = "https://api.search.brave.com/res/v1/web/search"
+SEARCH_COST_USD = 0.005          # declared estimate per query; the key and its budget come from the evaluator
+NOT_OWN = re.compile(r"(^|\.)(proff|purehelp|1881|gulesider|brreg|finn|linkedin|facebook|instagram|youtube|x|twitter|"
+                     r"wikipedia|wikidata|allabolag|bisnode|dnb|regnskapstall|forvalt|kompass|enirogroup|eniro|"
+                     r"nav|arbeidsplassen|kununu|glassdoor|indeed|tiktok|google|bing|yelp|tripadvisor|hotels|"
+                     r"booking|mittanbud|anbud365|firmasok|bedriftsdatabasen|ratsit|merinfo|largestcompanies)\.",
+                     re.I)
+
+
+def search_candidates(client, env: Envelope, entity: dict, count: int = 6) -> list[str]:
+    """Optional: root URLs of web-search results for the company name. Only used when the evaluator supplies
+    BRAVE_SEARCH_API_KEY. Results are candidates, never evidence: a site is published only after the organisation number
+    and the company name are found on the site itself."""
+    import os
+    from urllib.parse import quote_plus
+    key = os.environ.get("BRAVE_SEARCH_API_KEY", "").strip()
+    core = name_core(entity.get("navn") or "")
+    if not key or len(core) < 3:
+        return []
+    town = ((entity.get("forretningsadresse") or {}).get("poststed") or "").title()
+    q = '"%s" %s' % (core, town)
+    r = client.get(BRAVE + "?q=%s&count=%d&country=NO" % (quote_plus(q), count), accept="application/json",
+                   headers={"X-Subscription-Token": key}, timeout=15, retries=1)
+    env.cost_usd = getattr(env, "cost_usd", 0.0) + SEARCH_COST_USD
+    if not r.ok:
+        env.error("website.search", "search API answered %s" % r.status)
+        return []
+    out = []
+    try:
+        results = ((r.json().get("web") or {}).get("results")) or []
+    except ValueError:
+        return []
+    for res in results:
+        host = urlsplit(res.get("url") or "").hostname or ""
+        if host and not NOT_OWN.search(site_key(host)) and host not in out:
+            out.append("https://%s/" % host)
+    return out[:4]
+
+
 DECLARED = {"registry_listed": "listed by the company in the register",
             "nav_employer_homepage": "given as employer homepage in the company's own job ad on Nav"}
 
@@ -263,6 +302,9 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         add(u, origin)
     for d in guess_domains(name):
         add("https://" + d + "/", "name_guess")
+    if not registry:
+        for u in search_candidates(client, env, entity):
+            add(u, "search_candidate")
     tokens = name_tokens(name)
     for url, origin in candidates:
         site = Site(client, env, url)
@@ -305,7 +347,7 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         named = bool(tokens) and all(t in fold(page.title + " " + page.text[:20000]) for t in tokens[:3])
         if proof_snap and not ORG_CONTEXT.search(proof_span or ""):
             proof_snap = None                          # a bare nine-digit number without «org.nr», «MVA» and the like
-        if proof_snap and origin == "name_guess" and not named:
+        if proof_snap and origin in ("name_guess", "search_candidate") and not named:
             proof_snap = None                          # a directory or portal can list many numbers: need the name too
         if proof_snap:
             proof, conf, state = "organisation number shown on the site", 0.99, "available"
@@ -322,8 +364,10 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         ev = [env.cite(snap, (page.title or "")[:160], "homepage")]
         if proof_snap:
             ev.append(env.cite(proof_snap, proof_span, "organisation_number"))
+        how = {"name_guess": "; found by name-based domain check",
+               "search_candidate": "; candidate from a web search, verified on the site itself"}.get(origin, "")
         env.claim("website_profiles", "official_website", r.final_url if state == "available" else None, ev, state,
-                  confidence=conf, note=proof + ("; found by name-based domain check" if origin == "name_guess" else ""))
+                  confidence=conf, note=proof + how)
         if state != "available":
             return {"status": state}
         return {"status": "available", "site": site, "home": (r, snap, page), "origin": origin}

@@ -50,12 +50,17 @@ Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
   in job ads are not used.
 - Social profiles are published only when the verified company site links them (JSON-LD `sameAs`, or an outbound link
   whose account name resembles the company or its domain). No platform is scraped.
-- Search results are not used. No language model is used; synthesis is deterministic and cites claims.
+- Web search is optional: only when the evaluator supplies `BRAVE_SEARCH_API_KEY`, one query per company without a
+  registered website (`"<name>" <town>`) proposes candidate domains; results are never evidence, a candidate is
+  published only when the site itself shows the organisation number in a register context and names the company.
+  Declared cost estimate: 0.005 USD per query, reported per envelope and per run. Without the key the agent makes no
+  search requests and costs nothing.
+- No language model is used; synthesis is deterministic and cites claims.
 - Outbound URL policy: http and https only, ports 80 and 443, no credentials in URLs, every host (and every redirect
   target) must resolve to public addresses; per-host spacing (one request per second for company sites), timeouts,
   a 3 MB size limit and a time budget per company.
 - Secrets: none. The Nav public token is fetched at run time and never written to disk.
-- Third-party cost: 0 USD per run.
+- Third-party cost: 0 USD per run without a search key.
 
 ## Licence
 

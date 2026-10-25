@@ -89,7 +89,7 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
     except Exception as exc:
         out["synthesis"] = {"sentences": [], "error": "%s: %s" % (type(exc).__name__, exc)}
     out["operations"] = {"requests": cc.requests, "runtime_ms": int((time.monotonic() - t0) * 1000),
-                         "third_party_cost_usd": 0}
+                         "third_party_cost_usd": round(getattr(env, "cost_usd", 0.0), 4)}
     return out
 
 
@@ -160,7 +160,7 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
         "requests_by_host": dict(client.requests), "failed_requests_by_host": dict(client.failures),
         "requests_total": sum(client.requests.values()),
         "runtime_ms_p50": int(statistics.median(rt)), "runtime_ms_p95": rt[min(len(rt) - 1, int(0.95 * len(rt)))],
-        "third_party_cost_usd": 0,
+        "third_party_cost_usd": round(sum(done[o]["operations"].get("third_party_cost_usd", 0) for o in orgs), 4),
         "nav_feed": ({"status": nav.status, "pages": nav.pages, "ads": len({u for v in nav.by_name.values() for u in v}),
                       "seconds": getattr(nav, "seconds", None)} if nav else None),
     }
