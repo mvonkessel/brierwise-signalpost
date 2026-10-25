@@ -157,7 +157,7 @@ class Page(HTMLParser):
 
 
 def parse_page(resp) -> Page | None:
-    ctype = (resp.headers.get("Content-Type") or resp.headers.get("content-type") or "").lower()
+    ctype = (resp.headers.get("content-type") or "").lower()
     if not resp.ok or ("html" not in ctype and not resp.body.lstrip()[:15].lower().startswith((b"<!doctype", b"<html"))):
         return None
     p = Page(resp.final_url or resp.url)
@@ -237,19 +237,31 @@ class Site:
         return self.pages[url]
 
 
-def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0) -> dict:
-    """Return {'status', 'site', 'proof', ...}; adds website claims. `seconds` bounds the whole website stage."""
+DECLARED = {"registry_listed": "listed by the company in the register",
+            "nav_employer_homepage": "given as employer homepage in the company's own job ad on Nav"}
+
+
+def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, extra: list | None = None) -> dict:
+    """Return {'status', 'site', 'proof', ...}; adds website claims. `seconds` bounds the whole website stage.
+
+    `extra`: further declared candidates as (url, origin), e.g. the employer homepage of a matched Nav job ad."""
     deadline = time.monotonic() + seconds
     name = entity.get("navn") or ""
     pat = orgnr_patterns(env.orgnr)
     registry = normalize_site(entity.get("hjemmeside") or "")
-    candidates = []
+    candidates, seen = [], set()
+
+    def add(u, origin):
+        u = normalize_site(u or "")
+        if u and site_key(urlsplit(u).hostname) not in seen:
+            seen.add(site_key(urlsplit(u).hostname))
+            candidates.append((u, origin))
     if registry:
-        candidates.append((registry, "registry_listed"))
+        add(registry, "registry_listed")
+    for u, origin in extra or []:
+        add(u, origin)
     for d in guess_domains(name):
-        u = "https://" + d + "/"
-        if not registry or site_key(urlsplit(u).hostname) != site_key(urlsplit(registry).hostname):
-            candidates.append((u, "name_guess"))
+        add("https://" + d + "/", "name_guess")
     tokens = name_tokens(name)
     for url, origin in candidates:
         site = Site(client, env, url)
@@ -271,10 +283,10 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0) -> 
             continue
         final_host = site_key(urlsplit(r.final_url).hostname)
         same_domain = final_host == site_key(urlsplit(url).hostname)
-        proof_url, proof_span = None, None
+        proof_snap, proof_span = None, None
         m = pat.search(page.text)
         if m:
-            proof_url, proof_span = r.final_url, page.text[max(0, m.start() - 60): m.end() + 20]
+            proof_snap, proof_span = snap, page.text[max(0, m.start() - 60): m.end() + 20]
         else:
             for link, text in page.links:
                 lp = urlsplit(link)
@@ -285,31 +297,32 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0) -> 
                     p2 = parse_page(r2)
                     m2 = pat.search(p2.text) if p2 else None
                     if m2:
-                        proof_url, proof_span = r2.final_url, p2.text[max(0, m2.start() - 60): m2.end() + 20]
+                        proof_snap, proof_span = snap2, p2.text[max(0, m2.start() - 60): m2.end() + 20]
                         break
                 if len(site.pages) >= 4:
                     break
         named = bool(tokens) and all(t in fold(page.title + " " + page.text[:20000]) for t in tokens[:3])
-        if proof_url:
+        if proof_snap:
             proof, conf, state = "organisation number shown on the site", 0.99, "available"
-        elif origin == "registry_listed" and same_domain and named:
-            proof, conf, state = "listed by the company in the register; site names the company", 0.85, "available"
-        elif origin == "registry_listed":
-            proof, conf, state = ("listed in the register, but the site %s and shows no organisation number" %
-                                  ("redirects to %s" % final_host if not same_domain else "does not name the company"),
+        elif origin in DECLARED and same_domain and named:
+            proof, conf, state = DECLARED[origin] + "; site names the company", 0.85, "available"
+        elif origin in DECLARED:
+            proof, conf, state = ("%s, but the site %s and shows no organisation number" % (DECLARED[origin],
+                                  "redirects to %s" % final_host if not same_domain else "does not name the company"),
                                   0.4, "ambiguous")
+            if origin != "registry_listed":
+                continue                               # only the register's own entry is reported as ambiguous
         else:
             continue                                   # a guessed domain without the number is never published
         ev = [env.cite(snap, (page.title or "")[:160], "homepage")]
-        if proof_url:
-            psnap = site.pages.get(proof_url, (None, snap, None))[1] or snap
-            ev.append(env.cite(psnap, proof_span, "organisation_number"))
+        if proof_snap:
+            ev.append(env.cite(proof_snap, proof_span, "organisation_number"))
         env.claim("website_profiles", "official_website", r.final_url if state == "available" else None, ev, state,
                   confidence=conf, note=proof + ("; found by name-based domain check" if origin == "name_guess" else ""))
         if state != "available":
             return {"status": state}
         return {"status": "available", "site": site, "home": (r, snap, page), "origin": origin}
-    if not registry:
+    if not any(c["field"] == "official_website" for c in env.claims):
         env.claim("website_profiles", "official_website", None, [], "not_available",
                   note="no website in the register; name-based domains (%s) showed no matching organisation number"
                   % ", ".join(d for d in guess_domains(name)) if guess_domains(name) else

@@ -12,6 +12,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from . import AGENT_NAME, __version__
 from .http import Client, now_iso
 from .model import Envelope, SECTIONS, valid_orgnr
+from .jobs import NavIndex, jobs
 from .official import official
 from .website import extract_site, find_website
 
@@ -56,7 +57,7 @@ def load_batch(path: str) -> tuple[list[str], int]:
     return out, dup
 
 
-def research(client: Client, orgnr: str, run_id: str) -> dict:
+def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = None) -> dict:
     t0 = time.monotonic()
     meta = {"run_id": run_id, "agent": AGENT_NAME, "agent_version": __version__, "started_at": now_iso()}
     env = Envelope(orgnr, meta)
@@ -70,7 +71,9 @@ def research(client: Client, orgnr: str, run_id: str) -> dict:
         else:
             off = official(cc, env)
             if off["entity"] is not None:
-                found = find_website(cc, env, off["entity"])
+                hired = jobs(cc, env, nav, off["entity"], off["subunits"]) if nav else {"homepages": []}
+                extra = [(u, "nav_employer_homepage") for u, _ in hired["homepages"]]
+                found = find_website(cc, env, off["entity"], extra=extra)
                 if found.get("status") == "available":
                     extract_site(cc, env, found)
     except Exception as exc:                       # one broken company must not break the batch
@@ -85,13 +88,14 @@ def research(client: Client, orgnr: str, run_id: str) -> dict:
 
 
 def run_batch(organisations: str, output: str, report: str, run_id: str, workers: int = 8,
-              expected_count: int | None = None, checkpoint: str | None = None) -> dict:
+              expected_count: int | None = None, checkpoint: str | None = None, nav_days: int = 45) -> dict:
     orgs, duplicates = load_batch(organisations)
     for path in (output, report):
         os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     started = now_iso()
     t0 = time.monotonic()
     client = Client()
+    nav = NavIndex(client, days=nav_days) if nav_days else None
     checkpoint = checkpoint or output + ".partial"
     done = {}
     if os.path.exists(checkpoint):                 # resume: keep finished envelopes of this run id
@@ -106,7 +110,7 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
     lock = threading.Lock()
     todo = [o for o in orgs if o not in done]
     with open(checkpoint, "a", encoding="utf-8") as ck, ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(research, client, o, run_id): o for o in todo}
+        futures = {pool.submit(research, client, o, run_id, nav): o for o in todo}
         for fut in as_completed(futures):
             o = futures[fut]
             try:
@@ -144,6 +148,8 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
         "requests_total": sum(client.requests.values()),
         "runtime_ms_p50": int(statistics.median(rt)), "runtime_ms_p95": rt[min(len(rt) - 1, int(0.95 * len(rt)))],
         "third_party_cost_usd": 0,
+        "nav_feed": ({"status": nav.status, "pages": nav.pages, "ads": len({u for v in nav.by_name.values() for u in v}),
+                      "seconds": getattr(nav, "seconds", None)} if nav else None),
     }
     with open(report, "w", encoding="utf-8") as fh:
         json.dump(rep, fh, ensure_ascii=False, indent=1)

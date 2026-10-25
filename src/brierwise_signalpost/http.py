@@ -50,7 +50,7 @@ class Response:
 
     def text(self) -> str:
         charset = "utf-8"
-        ctype = self.headers.get("Content-Type") or self.headers.get("content-type") or ""
+        ctype = self.headers.get("content-type") or ""
         if "charset=" in ctype:
             charset = ctype.split("charset=", 1)[1].split(";")[0].strip().strip('"') or "utf-8"
         try:
@@ -145,8 +145,8 @@ class Client:
                 req = urllib.request.Request(url, headers=head)
                 with self._opener.open(req, timeout=timeout) as r:
                     body = r.read(self.max_bytes + 1)[: self.max_bytes]
-                    hdrs = dict(r.headers.items())
-                    body = _decompress(body, hdrs.get("Content-Encoding", ""))
+                    hdrs = {k.lower(): v for k, v in r.headers.items()}
+                    body = _decompress(body, hdrs.get("content-encoding", ""))
                     return Response(url, r.geturl(), r.status, hdrs, body, now_iso(), "",
                                     int((time.monotonic() - t0) * 1000))
             except urllib.error.HTTPError as e:
@@ -154,13 +154,13 @@ class Client:
                     body = e.read(200_000)
                 except Exception:
                     body = b""
-                hdrs = dict(e.headers.items()) if e.headers else {}
-                body = _decompress(body, hdrs.get("Content-Encoding", ""))
+                hdrs = {k.lower(): v for k, v in e.headers.items()} if e.headers else {}
+                body = _decompress(body, hdrs.get("content-encoding", ""))
                 last = Response(url, e.geturl() or url, e.code, hdrs, body, now_iso(), "HTTP %d" % e.code,
                                 int((time.monotonic() - t0) * 1000))
                 if e.code not in RETRY_STATUS:
                     break
-                retry_after = hdrs.get("Retry-After", "")
+                retry_after = hdrs.get("retry-after", "")
                 pause = float(retry_after) if retry_after.isdigit() else 1.5 * (attempt + 1)
                 if attempt < retries:
                     time.sleep(min(pause, 10.0))
