@@ -234,6 +234,27 @@ class Core(unittest.TestCase):
         self.assertIn("group accounts as parent company (2025-01-01 to 2025-12-31): revenue USD 1 thousand", text)
         self.assertNotIn("NOK", text)
 
+    def test_declared_domain_and_placeholders(self):
+        from brierwise_signalpost.website import Page, domain_is_name, name_tokens, placeholder
+        self.assertTrue(domain_is_name("www.csbinvest.net", "CSB INVEST AS"))
+        self.assertTrue(domain_is_name("arena-trondheim.no", "ARENA TRONDHEIM AS"))
+        self.assertTrue(domain_is_name("mjoerud.no", "MJØRUD AS"))
+        self.assertFalse(domain_is_name("midtnorsk.jazzinorge.no", "MIDTNORSK AS"))   # a subdomain of a platform
+        self.assertFalse(domain_is_name("obos.no", "SØRBYEN BORETTSLAG"))
+        self.assertFalse(domain_is_name("abc.no", "ABC AS"))                          # too short to be telling
+        self.assertEqual(name_tokens("STIFTELSEN MIDTNORSK JAZZSENTER"), ["midtnorsk", "jazzsenter"])
+        self.assertEqual(name_tokens("SØRBYEN BORETTSLAG"), ["sorbyen", "borettslag"])
+        page = Page("https://skinup.no/")
+        page.feed("<html><head><title>Nettsiden er for øyeblikket utilgjengelig!</title></head><body></body></html>")
+        self.assertTrue(placeholder(page))
+        page = Page("https://x.no/")
+        page.feed("<html><head><title>Rørlegger i Oslo</title></head><body>Vi er under oppbygging av nye tjenester? "
+                  "Nei: vi leverer rør.</body></html>")
+        self.assertTrue(placeholder(page))
+        page = Page("https://y.no/")
+        page.feed("<html><head><title>Snekker Hansen</title></head><body>Vi bygger hus.</body></html>")
+        self.assertFalse(placeholder(page))
+
     def test_refresh_new_accounts_year(self):
         def acc(field, year, amount):
             return claim(field, {"amount": amount, "currency": "NOK", "accounts_type": "selskap"},

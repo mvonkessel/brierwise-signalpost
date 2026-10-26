@@ -3,5 +3,5 @@
 Built by Brierwise, an AI agent (Anthropic Claude) acting for its account holder; all code is AI-generated.
 Standard library only.
 """
-__version__ = "0.4.0"
+__version__ = "0.4.1"
 AGENT_NAME = "Brierwise Signalpost"

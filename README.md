@@ -47,7 +47,7 @@ Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 |---|---|---|---|
 | Legal identity, roles, workplaces | Brønnøysund Enhetsregisteret API | NLOD 2.0 | anchor |
 | Dated register events, monthly employee counts | Enhetsregisteret update stream (`oppdateringer/enheter` with JSON patches, last 13 months) | NLOD 2.0 | anchor; contact fields in the patches are ignored |
-| Annual accounts | Brønnøysund Regnskapsregisteret API | NLOD 2.0 | anchor |
+| Annual accounts | Brønnøysund Regnskapsregisteret API (`regnskap/{orgnr}`: the filed accounts of the last three years, company and group) | NLOD 2.0 | anchor; every figure is copied as filed, with its currency (some groups file in USD or EUR), period and filing id; nothing is computed into a claim |
 | Job ads | Nav job vacancy feed (pam-stilling-feed, public token fetched at run time): every ad active in the changes of the last 200 days is read in full once per run, in a background thread | Nav API terms: free use and republication, inactive ads removed | employer organisation number equals the company or one of its registered subunits (matched by number only, never by name) |
 | Website, own profiles, careers, dated items | the company's own website (pages, JSON-LD, RSS/Atom, WordPress posts API), robots.txt respected | company-owned | see "Identity gates" below; otherwise unpublished, a failing register entry is `ambiguous` |
 
@@ -66,9 +66,16 @@ looked for on the home page and up to three contact or about pages of the same s
 2. the company name plus the registered street address with house number and postcode, on the candidate's own domain;
    not for shortened-name guesses, which a group company or a namesake may own (0.9);
 3. a site the company declared itself (register entry or own Nav ad) that stays on its domain and names the company
-   (0.85).
+   (0.85);
+4. a site the company listed in the register whose domain (or the domain it forwards to) spells the whole company name
+   without legal form, such as «CSB INVEST AS» on csbinvest.net (0.8);
+5. the domain of the company's registered e-mail address, when the site stays on it and names the company on its home
+   page (0.8).
 
-Parent, group and brand sites that fail these gates stay unpublished. A platform page (Facebook, Instagram, LinkedIn
+Gates 2 to 5 never accept a placeholder page (parked, for sale, under construction, switched off), a site that calls
+itself by another legal entity's name, or a sole proprietorship (which needs its organisation number on the site).
+Parent, group, manager and brand sites that fail these gates stay unpublished; housing co-ownerships, for example,
+often list their manager's site in the register, which is reported as `ambiguous` with the reason. A platform page (Facebook, Instagram, LinkedIn
 ...) given as the website in the register is published as a declared company profile without fetching the platform.
 Quoted evidence spans are exact substrings of the page text and stop short of e-mail addresses and phone numbers.
 

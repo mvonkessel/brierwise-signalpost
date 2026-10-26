@@ -57,8 +57,37 @@ def name_core(legal_name: str) -> str:
     return n
 
 
+# Words for the kind of body, not its name («Stiftelsen Midtnorsk Jazzsenter»): a site names a foundation or an
+# association when it shows the other words. Housing co-ownerships keep theirs; their register sites are mostly the
+# manager's.
+FORM_WORDS = {"stiftelsen", "stiftelse", "stiftinga", "stifting", "foreningen", "forening"}
+
+
 def name_tokens(legal_name: str) -> list[str]:
-    return [t for t in re.split(r"[^a-z0-9]+", fold(name_core(legal_name))) if len(t) >= 3]
+    toks = [t for t in re.split(r"[^a-z0-9]+", fold(name_core(legal_name))) if len(t) >= 3]
+    return [t for t in toks if t not in FORM_WORDS] or toks
+
+
+def domain_is_name(host: str, legal_name: str) -> bool:
+    """The domain (no subdomain) spells the whole name without legal form: «CSB INVEST AS» on csbinvest.net."""
+    labels = site_key(host).split(".")
+    if len(labels) != 2:
+        return False
+    raw = name_core(legal_name).lower().replace("&", "og")
+    names = {re.sub(r"[^a-z0-9]", "", fold(f)) for f in (raw, raw.replace("å", "aa").replace("ø", "oe"))}
+    return len(labels[0]) >= 5 and labels[0].replace("-", "") in names
+
+
+# Placeholder pages: a parked, for-sale, unfinished or switched-off site says nothing about who runs it.
+PLACEHOLDER = re.compile(r"(domain (name )?(is|may be) for sale|buy this domain|domenet (er )?til salgs|kjop dette "
+                         r"domenet|parkert (hos|av)|parked (free|domain|by)|under construction|under oppbygging|"
+                         r"nettsiden er (for oyeblikket |midlertidig )?utilgjengelig|site (is )?(temporarily )?"
+                         r"unavailable|account (has been )?suspended|default web site page|welcome to nginx|"
+                         r"it works!|index of /)")
+
+
+def placeholder(page) -> bool:
+    return bool(PLACEHOLDER.search(fold(page.title + " " + page.text[:3000])))
 
 
 GENERIC_WORDS = {"holding", "holdings", "invest", "investering", "investment", "investments", "eiendom", "eiendommer",
@@ -569,17 +598,28 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         # A sole proprietorship often carries a person's name and sits at an employer's or agency's address: only its
         # organisation number on the site ties a site to it.
         weak_ok = ((entity.get("organisasjonsform") or {}).get("kode") or "") not in ("ENK",) and not other
+        dummy = kind != "orgnr" and placeholder(page)
         if kind == "orgnr" and (declared or named):
             proof, conf = "organisation number shown on the site", 0.99
+        elif dummy:
+            proof = None
         elif kind == "orgnr_shared" and declared and origin != "subunit_listed" and weak_ok:
             proof, conf = "organisation number shown on the site next to other companies' numbers", 0.9
         elif kind == "address" and named and same_domain and origin != "name_short" and weak_ok:
             proof, conf = "the site names the company and shows its registered street address", 0.9
         elif declared and origin != "subunit_listed" and same_domain and named_home and weak_ok:
             proof, conf = DECLARED[origin] + "; site names the company", 0.85
+        elif origin == "registry_listed" and weak_ok and domain_is_name(final_host, name):
+            proof, conf = DECLARED[origin] + ("; the domain spells the company name" if same_domain else
+                                              "; it forwards to %s, which spells the company name" % final_host), 0.8
+        elif origin == "email_domain" and same_domain and named_home and weak_ok:
+            proof, conf = "the site names the company on its home page", 0.8
         else:
+            proof = None
+        if proof is None:
             if origin == "registry_listed":
-                why_not = ("presents itself as «%s», another legal entity," % other if other else
+                why_not = ("looks like a placeholder (parked, for sale or switched off)" if dummy else
+                           "presents itself as «%s», another legal entity," % other if other else
                            "redirects to %s" % final_host if not same_domain else "does not name the company")
                 deferred = ("ambiguous", [env.cite(snap, (page.title or "")[:160], "homepage")],
                             "%s, but the site %s and shows no organisation number" % (DECLARED[origin], why_not), 0.4)
@@ -589,6 +629,8 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             ev.append(env.cite(proof_snap, span, "registered_address" if kind == "address" else "organisation_number"))
         if origin == "email_domain" and register_snap:
             ev.append(env.cite(register_snap, mail_domain, "epostadresse (domain only)"))
+        if origin == "registry_listed" and register_snap:
+            ev.append(env.cite(register_snap, "hjemmeside: %s" % raw_hp, "hjemmeside"))
         env.claim("website_profiles", "official_website", r.final_url, ev, "available", confidence=conf,
                   note=proof + ORIGIN_NOTE.get(origin, ""))
         return {"status": "available", "site": site, "home": (r, snap, page), "origin": origin}
