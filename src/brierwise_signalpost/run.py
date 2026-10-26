@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import statistics
 import threading
 import time
@@ -15,7 +16,7 @@ from .model import Envelope, SECTIONS, valid_orgnr
 from .jobs import NavIndex, jobs
 from .official import official
 from .refresh import compare, load_previous
-from .synthesis import synthesize
+from .synthesis import synthesize, with_changes
 from .website import extract_site, find_website
 
 
@@ -31,31 +32,49 @@ class CountingClient:
         return self.client.get(*a, **kw)
 
 
+ORG_KEYS = ("organisation_number", "organization_number", "orgnr", "organisasjonsnummer", "org")
+NINE = re.compile(r"(?<!\d)\d{3}\s?\d{3}\s?\d{3}(?!\d)")
+
+
 def load_batch(path: str) -> tuple[list[str], int]:
-    """Organisation numbers in input order without repeats; JSONL rows (organisation_number) or one number per line."""
-    seen, out, dup = set(), [], 0
+    """Organisation numbers in input order without repeats. Accepts JSONL rows ({"organisation_number": ...}), a JSON
+    list or {"organisation_numbers": [...]}, CSV with or without a header (first nine-digit field), or one number per
+    line. A row that holds no usable number still gets its own envelope (state not_applicable); a header row does not."""
     with open(path, encoding="utf-8-sig") as fh:
-        for line in fh:
+        text = fh.read()
+    values = None
+    if text.strip()[:1] in ("[", "{"):
+        try:
+            body = json.loads(text)
+            values = body if isinstance(body, list) else next(
+                (body[k] for k in ("organisation_numbers", "organization_numbers", "companies", "organisations")
+                 if isinstance(body.get(k), list)), [body])
+        except ValueError:
+            values = None                              # JSON Lines: one object per line, read below
+    if values is None:
+        values = []
+        for line in text.splitlines():
             line = line.strip()
-            if not line:
-                continue
-            org = None
-            if line.startswith("{"):
-                row = json.loads(line)
-                for key in ("organisation_number", "organization_number", "orgnr", "organisasjonsnummer", "org"):
-                    if row.get(key):
-                        org = str(row[key])
-                        break
-            elif line.startswith('"'):
-                org = json.loads(line)
-            else:
-                org = line
-            org = "".join(ch for ch in str(org or "") if not ch.isspace())
-            if org in seen:
-                dup += 1
-                continue
-            seen.add(org)
-            out.append(org)
+            if line:
+                values.append(json.loads(line) if line[:1] in ("{", '"') else line)
+    seen, out, dup = set(), [], 0
+    for v in values:
+        if isinstance(v, dict):
+            raw = next((str(v[k]) for k in ORG_KEYS if v.get(k) not in (None, "")), "")
+        else:
+            raw = str(v)
+        m = NINE.search(raw)
+        if m:
+            org = re.sub(r"\s", "", m.group(0))
+        elif re.search(r"[A-Za-z]", raw) and not re.search(r"\d", raw):
+            continue                                   # a header row such as «organisation_number»
+        else:
+            org = "".join(ch for ch in raw if not ch.isspace()) or "(empty)"
+        if org in seen:
+            dup += 1
+            continue
+        seen.add(org)
+        out.append(org)
     return out, dup
 
 
@@ -75,7 +94,7 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
             if off["entity"] is not None:
                 hired = jobs(cc, env, nav, off["entity"], off["subunits"]) if nav else {"homepages": []}
                 extra = [(u, "nav_employer_homepage") for u, _ in hired["homepages"]]
-                found = find_website(cc, env, off["entity"], extra=extra)
+                found = find_website(cc, env, off["entity"], extra=extra, subunits=off["subunits"])
                 if found.get("status") == "available":
                     extract_site(cc, env, found)
     except Exception as exc:                       # one broken company must not break the batch
@@ -131,6 +150,8 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
                        "operations": {"requests": 0, "runtime_ms": 0, "third_party_cost_usd": 0}}
             p = prev.get(o)
             env["changes"], env["history"] = compare(p, env)
+            if env.get("synthesis") and "error" not in env["synthesis"]:
+                env["synthesis"] = with_changes(env["synthesis"], env["changes"], p, env.get("claims") or [])
             env["refresh"] = {"previous_run_id": (p or {}).get("run", {}).get("run_id"),
                               "previous_completed_at": (p or {}).get("run", {}).get("completed_at"),
                               "material_changes": len(env["changes"]), "first_run": p is None}

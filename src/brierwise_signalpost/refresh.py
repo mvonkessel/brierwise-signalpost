@@ -11,7 +11,7 @@ import json
 MATERIAL = {
     "legal_name": None, "organisation_form": None, "registry_status": None, "business_address": None,
     "postal_address": None, "industry_codes": None, "registered_employees": None, "registry_website": None,
-    "official_website": None, "share_capital": None, "registered_purpose": None, "part_of_group": None,
+    "official_website": None, "public_brand": None, "share_capital": None, "registered_purpose": None, "part_of_group": None,
     "role": lambda v: (v.get("role_code"), v.get("name")),
     "registered_workplace": lambda v: v.get("organisation_number"),
     "company_profile": lambda v: (v.get("platform"), v.get("url")),

@@ -138,14 +138,19 @@ def synthesize(env) -> dict:
     if emp:
         say("employees", "The register reports %s employees." % emp["value"], [emp])
     # online presence
-    site, profs = first("official_website"), av("company_profile")
+    site, profs, brand = first("official_website"), av("company_profile"), first("public_brand")
     if site:
         text = "Official website: %s (%s)." % (site["value"], site.get("note") or "verified")
+        if brand:
+            text += " The site presents the company as «%s»." % brand["value"]
         if profs:
             text += " Company-owned profiles linked from it: %s." % ", ".join(sorted(c["value"]["platform"].title()
                                                                                      for c in profs))
-        say("online", text, [site] + profs)
+        say("online", text, [site, brand] + profs)
     else:
+        if profs:
+            say("online", "Company-owned profile given in the register: %s." % ", ".join(
+                "%s (%s)" % (c["value"]["platform"].title(), c["value"]["url"]) for c in profs), profs)
         w = by.get("official_website", [])
         if w:
             unknown.append(("official website", w[0]["availability"], w))
@@ -165,8 +170,14 @@ def synthesize(env) -> dict:
     acts = sorted(av("dated_activity"), key=lambda c: c["value"].get("date") or "", reverse=True)
     if acts:
         a = acts[0]["value"]
-        say("activity", "Most recent dated activity on its own channels: %s, «%s»." % (a["date"], a["title"][:120]),
-            acts[:1])
+        say("activity", "Most recent dated activity on its own channels: %s, «%s»%s." % (
+            a["date"], a["title"][:120], " (%d dated items found)" % len(acts) if len(acts) > 1 else ""), acts[:3])
+    elif site:
+        unknown.append(("dated public activity", "not_available", [site]))
+    if not emp:
+        e = by.get("registered_employees", [])
+        if e:
+            unknown.append(("number of employees", e[0]["availability"], e))
     # unknowns
     labels = {"not_available": "not found in the checked sources", "blocked": "the source refused the request",
               "failed": "the source could not be read in this run", "ambiguous": "a candidate could not be tied to "
@@ -175,3 +186,67 @@ def synthesize(env) -> dict:
         say("unknown", "Unknown %s: %s." % (what, labels.get(state, state)), claims)
     return {"method": "deterministic templates over this envelope's claims; no language model",
             "sentences": out}
+
+
+FIELD_TEXT = {"legal_name": "legal name", "organisation_form": "legal form", "registry_status": "register status",
+              "business_address": "business address", "postal_address": "postal address",
+              "industry_codes": "industry classification", "registered_employees": "registered employee count",
+              "registry_website": "website in the register", "official_website": "official website",
+              "share_capital": "share capital", "registered_purpose": "registered purpose",
+              "part_of_group": "group membership", "role": "role holder", "registered_workplace": "registered workplace",
+              "company_profile": "company-owned profile", "job_posting": "job ad", "dated_activity": "dated item",
+              "public_brand": "public brand", "revenue": "revenue", "operating_result": "operating result",
+              "net_result": "net result", "equity": "equity", "total_assets": "total assets",
+              "total_debt": "total debt", "profit_before_tax": "profit before tax"}
+
+
+def _short(v) -> str:
+    if isinstance(v, dict):
+        if v.get("amount") is not None:
+            return "NOK " + nok(v["amount"])
+        bits = [str(v[k]) for k in ("role", "name", "title", "platform", "url", "label", "address") if v.get(k)]
+        return ", ".join(bits[:2]) or "a new value"
+    if isinstance(v, list):
+        return "; ".join(_short(x) for x in v[:3])
+    return str(v)[:100]
+
+
+def change_sentences(changes: list, prev: dict | None, claims: list) -> list:
+    """What changed: material changes against the previous run, and dated changes the register itself records."""
+    out = []
+    if prev:
+        when = ((prev.get("run") or {}).get("completed_at") or "")[:10] or "the previous run"
+        if changes:
+            parts = []
+            for c in changes[:5]:
+                label = FIELD_TEXT.get(c["field"], c["field"].replace("_", " "))
+                if c["change"] == "changed":
+                    parts.append("%s changed from %s to %s" % (label, _short(c["before"]), _short(c["after"])))
+                elif c["change"] == "added":
+                    parts.append("new %s: %s" % (label, _short(c["after"])))
+                else:
+                    parts.append("%s no longer found: %s" % (label, _short(c["before"])))
+            more = " and %d more" % (len(changes) - 5) if len(changes) > 5 else ""
+            ids = sorted({i for c in changes for i in c.get("evidence_ids") or []}, key=lambda s: int(s.split("-")[1]))
+            out.append({"topic": "changes", "text": "Since the previous run (%s): %s%s." % (when, "; ".join(parts),
+                                                                                         more), "evidence_ids": ids})
+        else:
+            out.append({"topic": "changes", "text": "No material change since the previous run (%s)." % when,
+                        "evidence_ids": []})
+    else:
+        out.append({"topic": "changes", "text": "First run for this company: there is no earlier snapshot yet, so the "
+                    "next refresh will report what changed.", "evidence_ids": []})
+    former = next((c for c in claims if c["field"] == "former_names" and c["availability"] == "available"), None)
+    if former and former["value"]:
+        last = sorted(former["value"], key=lambda n: n.get("to") or "")[-1]
+        out.append({"topic": "changes", "text": "The register records an earlier name, %s, used until %s." % (
+            last["name"], last.get("to") or "an unknown date"), "evidence_ids": former["evidence_ids"]})
+    return out
+
+
+def with_changes(synthesis: dict, changes: list, prev: dict | None, claims: list) -> dict:
+    """Insert the change sentences before the unknowns."""
+    sents = synthesis.get("sentences") or []
+    known = [s for s in sents if s.get("topic") != "unknown"]
+    unknown = [s for s in sents if s.get("topic") == "unknown"]
+    return dict(synthesis, sentences=known + change_sentences(changes, prev, claims) + unknown)

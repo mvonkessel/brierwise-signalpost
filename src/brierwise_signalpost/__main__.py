@@ -17,7 +17,7 @@ def main(argv=None) -> int:
     r.add_argument("--output", required=True, help="output JSONL: one terminal envelope per input")
     r.add_argument("--report", required=True, help="machine-readable run report (JSON)")
     r.add_argument("--run-id", default=datetime.now(timezone.utc).strftime("run-%Y%m%dT%H%M%SZ"))
-    r.add_argument("--workers", type=int, default=8)
+    r.add_argument("--workers", type=int, default=12)
     r.add_argument("--expected-count", type=int)
     r.add_argument("--site", help="also build the static profile site into this folder")
     r.add_argument("--previous", help="envelopes of the previous run (JSONL): changes and history are derived from it")

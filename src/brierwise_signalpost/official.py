@@ -190,6 +190,8 @@ def fetch_subunits(client, env: Envelope, limit: int = 200) -> list[dict]:
                 "municipality": (u.get("beliggenhetsadresse") or {}).get("kommune"),
                 "industry": {"code": n.get("kode"), "label": n.get("beskrivelse")} if n.get("kode") else None,
                 "employees": u.get("antallAnsatte") if u.get("harRegistrertAntallAnsatte") else None}
+        if u.get("hjemmeside"):
+            item["website"] = u.get("hjemmeside")
         out.append((item, u.get("oppstartsdato") or u.get("registreringsdatoEnhetsregisteret")))
     if not out:
         env.claim("leadership_workplaces", "registered_workplaces", None,

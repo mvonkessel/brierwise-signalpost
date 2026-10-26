@@ -17,7 +17,7 @@ SECTIONS = (
 
 EMAIL = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
 PHONE = re.compile(r"(\+47[\s ]?)?\b(\d{2}[\s ]\d{2}[\s ]\d{2}[\s ]\d{2}|\d{3}[\s ]\d{2}"
-                   r"[\s ]\d{3}|[2-9]\d{7})\b")
+                   r"[\s ]\d{3}|\d{4}[\s ]\d{4}|[2-9]\d{7})\b")
 
 
 GENERIC_LOCAL = re.compile(r"^(post|postmottak|firmapost|info|kontakt|contact|salg|sales|office|kontor|mail|hello|"

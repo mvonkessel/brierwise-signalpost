@@ -16,11 +16,12 @@ PYTHONPATH=src python -m brierwise_signalpost run \
   --output out/envelopes.jsonl \
   --report out/run-report.json \
   --site out/site \
-  [--previous previous/envelopes.jsonl] [--run-id ID] [--workers 8] [--expected-count N] [--nav-days 45]
+  [--previous previous/envelopes.jsonl] [--run-id ID] [--workers 12] [--expected-count N] [--nav-days 45]
 ```
 
-`batch.jsonl` holds one organisation number per line, either as JSON (`{"organisation_number": "923609016"}`) or as
-plain digits. The run writes exactly one terminal envelope per distinct input number, in input order, a
+The batch file may be JSON Lines (`{"organisation_number": "923609016"}` per line), a JSON list or
+`{"organisation_numbers": [...]}`, CSV with or without a header (the first nine-digit field counts), or plain digits
+one per line. The run writes exactly one terminal envelope per distinct input number, in input order, a
 machine-readable run report, and (with `--site`) a static profile site. A crashed run resumes from
 `<output>.partial` when started again with the same `--run-id`. With `--previous`, each envelope lists material
 changes since that run and keeps facts that disappeared, with their original evidence, under `history`.
@@ -43,7 +44,27 @@ Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 | Legal identity, roles, workplaces | Brønnøysund Enhetsregisteret API | NLOD 2.0 | anchor |
 | Annual accounts | Brønnøysund Regnskapsregisteret API | NLOD 2.0 | anchor |
 | Job ads | Nav job vacancy feed (pam-stilling-feed, public token fetched at run time) | Nav API terms: free use and republication, inactive ads removed | employer organisation number equals the company or one of its registered subunits |
-| Website, own profiles, careers, dated items | the company's own website, robots.txt respected | company-owned | organisation number shown on the site, or the site was declared by the company (register entry or its own Nav ad) and stays on that domain and names the company; otherwise `ambiguous` |
+| Website, own profiles, careers, dated items | the company's own website (pages, JSON-LD, RSS/Atom, WordPress posts API), robots.txt respected | company-owned | see "Identity gates" below; otherwise unpublished, a failing register entry is `ambiguous` |
+
+### Identity gates for a website
+
+Candidates, in this order: the website in the company's register entry; employer homepages in the company's own Nav
+ads; the domain of the e-mail address in the company's register entry (domain only, mail and internet providers
+skipped, the address itself is never stored or shown); websites registered for its workplaces (up to three); domains
+built from the legal name (whole name, with «aa»/«oe» and as an internationalised domain; shortened name or first
+word); and, only with an evaluator key, web-search results. A candidate is published only with one of these proofs,
+looked for on the home page and up to three contact or about pages of the same site:
+
+1. the organisation number in a register context («org.nr», «MVA», «foretaksregisteret» ...), plus the company name
+   unless the company declared the site itself (confidence 0.99);
+2. the company name plus the registered street address with house number and postcode, on the candidate's own domain;
+   not for shortened-name guesses, which a group company or a namesake may own (0.9);
+3. a site the company declared itself (register entry or own Nav ad) that stays on its domain and names the company
+   (0.85).
+
+Parent, group and brand sites that fail these gates stay unpublished. A platform page (Facebook, Instagram, LinkedIn
+...) given as the website in the register is published as a declared company profile without fetching the platform.
+Quoted evidence spans are exact substrings of the page text and stop short of e-mail addresses and phone numbers.
 
 - Person data is used only in the company-centric role context: name and function of officers as published by the
   register. Dates of birth, registered phone numbers and e-mail addresses are not read into claims. Contact persons
