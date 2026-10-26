@@ -159,7 +159,7 @@ script: 4,466 of 4,466 equal, none missing. 1,000-company scale test with v0.4.1
 in 470 s with 12 workers (per company p50 4.7 s, p95 13.6 s), 18,024 requests; accounts for 998 companies (two answered
 HTTP 500 and are `failed`), verified websites 136, ambiguous register websites 31 (mostly sites of a manager or parent
 company: housing co-ownerships listing their manager, property companies listing their group). The new website gates
-added 6 verified sites, each reviewed by hand. Refresh against the v0.3.0 run of the same sample showed three kinds of
+added 7 verified sites (5 by the e-mail domain gate, 2 by the domain-spells-the-name gate), each reviewed by hand. Refresh against the v0.3.0 run of the same sample showed three kinds of
 false change, all fixed in v0.4.2: accounts reported as added although the service had only been down before, register
 events whose date flipped between local time and UTC, and a website reported as removed while it only failed to
 answer. Running v0.4.2 twice on the same 37 companies gave no change; a website that timed out in the second run was
