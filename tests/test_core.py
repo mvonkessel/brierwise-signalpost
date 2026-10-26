@@ -1,4 +1,5 @@
 import copy
+import json
 import unittest
 
 from brierwise_signalpost.jobs import core_name, norm_name
@@ -197,6 +198,52 @@ class Core(unittest.TestCase):
         words = "ord " * 100
         self.assertTrue(clip(words).endswith(" …"))
         self.assertNotIn("or …", clip(words))
+
+    def test_accounts_newest_company_first_with_currency(self):
+        from brierwise_signalpost.http import Response
+        from brierwise_signalpost.official import fetch_accounts
+        from brierwise_signalpost.site import latest_revenue
+        from brierwise_signalpost.synthesis import synthesize
+
+        def row(kind, year, revenue, currency="USD"):
+            return {"regnskapstype": kind, "valuta": currency, "journalnr": "%s0001" % (year + 1),
+                    "regnskapsperiode": {"fraDato": "%d-01-01" % year, "tilDato": "%d-12-31" % year},
+                    "resultatregnskapResultat": {"aarsresultat": revenue / 10,
+                                                 "driftsresultat": {"driftsinntekter": {"sumDriftsinntekter": revenue}}},
+                    "egenkapitalGjeld": {"egenkapital": {"sumEgenkapital": -5.0}}}
+        api = [row("KONSERN", 2023, 900.0), row("KONSERN", 2025, 1000.0), row("SELSKAP", 2023, 90.0),
+               row("SELSKAP", 2024, 80.0), row("SELSKAP", 2025, 100.0)]          # the API lists the oldest first
+
+        class Client:
+            def get(self, url, accept=None):
+                return Response(url, url, 200, body=json.dumps(api).encode(), retrieved_at="2026-10-26T00:00:00Z")
+        env = Envelope("923609016", {})
+        out = fetch_accounts(Client(), env, "2026")
+        self.assertEqual([(a["accounts_type"], a["period_end"], a["latest"]) for a in out],
+                         [("selskap", "2025-12-31", True), ("selskap", "2024-12-31", False),
+                          ("selskap", "2023-12-31", False), ("konsern", "2025-12-31", True),
+                          ("konsern", "2023-12-31", False)])
+        self.assertIn("2026", env.claims[0]["note"])  # the register lists 2026 as submitted, the API does not yet
+        rev = latest_revenue(env.claims)
+        self.assertEqual((rev["value"]["amount"], rev["value"]["currency"], rev["reporting_period"][-10:]),
+                         (100.0, "USD", "2025-12-31"))
+        text = " ".join(s["text"] for s in synthesize(env)["sentences"] if s["topic"] == "accounts")
+        self.assertIn("Latest filed company accounts (2025-01-01 to 2025-12-31)", text)
+        self.assertIn("revenue USD 100 (2024: USD 80, up 25%)", text)
+        self.assertIn("Equity is negative", text)
+        self.assertIn("group accounts as parent company (2025-01-01 to 2025-12-31): revenue USD 1 thousand", text)
+        self.assertNotIn("NOK", text)
+
+    def test_refresh_new_accounts_year(self):
+        def acc(field, year, amount):
+            return claim(field, {"amount": amount, "currency": "NOK", "accounts_type": "selskap"},
+                         section="annual_accounts", reporting_period="%d-01-01/%d-12-31" % (year, year))
+        a = env_with([acc("revenue", 2023, 1.0), acc("revenue", 2024, 2.0), acc("payroll_costs", 2024, 3.0)])
+        b = env_with([acc("revenue", 2024, 2.0), acc("revenue", 2025, 4.0), acc("payroll_costs", 2024, 3.5)])
+        changes, history = compare(a, b)
+        self.assertEqual(sorted((c["field"], c["change"], c["reporting_period"][:4]) for c in changes),
+                         [("payroll_costs", "changed", "2024"), ("revenue", "added", "2025")])
+        self.assertEqual(sorted(h["claim"]["reporting_period"][:4] for h in history), ["2023", "2024"])
 
 
 if __name__ == "__main__":

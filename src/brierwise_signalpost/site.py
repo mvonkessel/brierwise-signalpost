@@ -8,6 +8,8 @@ import html
 import json
 import os
 
+from .official import ACCOUNT_FIELDS, ACCOUNT_TYPE_TEXT
+
 CSS = """
 :root{--bg:#fbfbf8;--fg:#1d1f21;--mut:#5d6166;--line:#dcdcd5;--card:#fff;--acc:#1f5f8b;--ok:#2f7d4f;--warn:#9a6b00;
 --bad:#a33a2a;--chip:#eef1f4}
@@ -41,6 +43,26 @@ def e(s) -> str:
     return html.escape("" if s is None else str(s), quote=True)
 
 
+def _end(c: dict) -> str:
+    return str((c.get("reporting_period") or "").split("/")[-1])
+
+
+def accounts_columns(claims: list) -> list:
+    """Available accounts periods: company accounts before group accounts, newest first."""
+    rows = sorted((c for c in claims if c["field"] == "accounts_period" and c["availability"] == "available"),
+                  key=_end, reverse=True)
+    return sorted(rows, key=lambda c: (c["value"] or {}).get("accounts_type") != "selskap")
+
+
+def latest_revenue(claims: list) -> dict | None:
+    cols = accounts_columns(claims)
+    for col in cols[:1]:
+        kind, p = col["value"].get("accounts_type"), col["reporting_period"]
+        return next((c for c in claims if c["field"] == "revenue" and c["availability"] == "available" and
+                     c.get("reporting_period") == p and c["value"].get("accounts_type") == kind), None)
+    return None
+
+
 def summary(env: dict) -> dict:
     by = {}
     for c in env.get("claims", []):
@@ -50,12 +72,43 @@ def summary(env: dict) -> dict:
     form = first("organisation_form") or {}
     ind = (first("industry_codes") or [{}])[0]
     muni = first("municipality") or {}
-    rev = first("revenue") or {}
+    rc = latest_revenue(env.get("claims", []))
+    rev = rc["value"] if rc else {}
     return {"o": env["organisation_number"], "n": first("legal_name") or env["organisation_number"],
             "f": form.get("code"), "m": muni.get("name"), "i": ind.get("label"), "ic": ind.get("code"),
-            "r": rev.get("amount"), "e": first("registered_employees"), "w": first("official_website"),
+            "r": rev.get("amount"), "rc": rev.get("currency"), "ry": _end(rc)[:4] if rc else None,
+            "e": first("registered_employees"), "w": first("official_website"),
             "j": len(by.get("job_posting", [])), "p": len(by.get("company_profile", [])),
             "s": first("registry_status"), "sec": env.get("sections", {})}
+
+
+def accounts_table(claims: list, refs) -> str:
+    """The filed accounts as one table: a column per period (company accounts first, newest first), a row per
+    figure, each cell with its own evidence link."""
+    cols = accounts_columns(claims)
+    if not cols:
+        return ""
+    names = [n for n, _ in ACCOUNT_FIELDS]
+    cell = {}
+    for c in claims:
+        if c["field"] in names and c["availability"] == "available":
+            cell[(c["field"], c["value"].get("accounts_type"), c.get("reporting_period"))] = c
+    head = "".join('<th class=num>%s%s<div class=mut>%s, %s</div></th>' % (
+        e(_end(c)[:4]), refs(c["evidence_ids"]), e(ACCOUNT_TYPE_TEXT.get(c["value"].get("accounts_type"),
+                                                                        c["value"].get("accounts_type"))),
+        e(c["value"].get("currency") or "")) for c in cols)
+    rows = []
+    for n in names:
+        cs = [cell.get((n, c["value"].get("accounts_type"), c["reporting_period"])) for c in cols]
+        if not any(cs):
+            continue
+        rows.append("<tr><th>%s</th>%s</tr>" % (e(n.replace("_", " ")), "".join(
+            '<td class=num>%s%s</td>' % (e(format(x["value"]["amount"], ",.0f").replace(",", " ")),
+                                         refs(x["evidence_ids"])) if x else "<td class='num mut'>–</td>"
+            for x in cs)))
+    notes = "".join("<p class=mut>%s: %s</p>" % (e(_end(c)[:4]), e(c["note"])) for c in cols if c.get("note"))
+    return ('<div style="overflow-x:auto"><table><tr><th>Period (ending)</th>%s</tr>%s</table></div>%s' % (
+        head, "".join(rows), notes))
 
 
 def value_text(v) -> str:
@@ -109,7 +162,17 @@ def company_page(env: dict) -> str:
         rows = [c for c in env.get("claims", []) if c["section"] == sec]
         if not rows:
             continue
-        out.append("<h2>%s</h2><div class=card><table>" % e(title))
+        out.append("<h2>%s</h2><div class=card>" % e(title))
+        if sec == "annual_accounts":
+            table = accounts_table(rows, refs)
+            if table:
+                out.append(table)
+                shown = {n for n, _ in ACCOUNT_FIELDS} | {"accounts_period"}
+                rows = [c for c in rows if not (c["field"] in shown and c["availability"] == "available")]
+                if not rows:
+                    out.append("</div>")
+                    continue
+        out.append("<table>")
         for c in rows:
             when = c.get("reporting_period") or c.get("effective_date") or ""
             val = value_text(c["value"]) if c["availability"] == "available" else \
@@ -149,7 +212,7 @@ function draw(){const t=q.value.trim().toLowerCase();let n=0;const rows=[];for(c
 if(!ok)continue;if(++n>400)break;rows.push(`<div class="card item"><input type=checkbox aria-label="compare ${x.n}"
  ${sel.has(x.o)?'checked':''} onchange="tog('${x.o}',this.checked)"><div><a href="company/${x.o}.html">${esc(x.n)}</a>
 <div class=mut>${x.o} · ${x.f||''} · ${esc(tc(x.m||''))} · ${esc(x.i||'')}</div></div><div class=num>${
-x.r!=null?'NOK '+nf.format(Math.round(x.r/1e3))+'k':''}<div class=mut>${x.w?'website':''}${x.j?' · '+x.j+' jobs':''}
+x.r!=null?esc(x.rc||'')+' '+nf.format(Math.round(x.r/1e3))+'k <span class=mut>'+esc(x.ry||'')+'</span>':''}<div class=mut>${x.w?'website':''}${x.j?' · '+x.j+' jobs':''}
 </div></div></div>`)}list.innerHTML=rows.join('')||'<p class=mut>No company matches.</p>';
 document.getElementById('cnt').textContent=n>400?'first 400 shown':n+' shown'}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
@@ -165,7 +228,7 @@ function tc(s){return String(s).toLowerCase().replace(/(^|[\\s-])\\S/g,c=>c.toUp
 const url=u=>/^https?:\\/\\//i.test(u||'')?esc(u):'';
 const nf=new Intl.NumberFormat('en');const rows=[['Organisation number',x=>esc(x.o)],['Legal form',x=>esc(x.f||'')],
 ['Municipality',x=>esc(tc(x.m||''))],['Industry',x=>esc(x.i||'')],['Status',x=>esc(x.s||'')],
-['Revenue (latest)',x=>x.r!=null?'NOK '+nf.format(x.r):'not found'],['Registered employees',x=>esc(x.e??'not published')],
+['Revenue (latest filed)',x=>x.r!=null?esc(x.rc||'')+' '+nf.format(x.r)+(x.ry?' ('+esc(x.ry)+')':''):'not found'],['Registered employees',x=>esc(x.e??'not published')],
 ['Website',x=>url(x.w)?`<a href="${url(x.w)}" rel="nofollow noopener">${url(x.w)}</a>`:'not verified'],
 ['Own profiles',x=>esc(x.p)],['Active Nav job ads',x=>esc(x.j)]];
 document.getElementById('t').innerHTML='<tr><th></th>'+X.map(x=>`<th><a href="company/${esc(x.o)}.html">${esc(x.n)}</a></th>`).

@@ -208,23 +208,36 @@ def fetch_subunits(client, env: Envelope, limit: int = 200) -> list[dict]:
 
 ACCOUNT_FIELDS = (
     ("revenue", ("resultatregnskapResultat", "driftsresultat", "driftsinntekter", "sumDriftsinntekter")),
+    ("sales_revenue", ("resultatregnskapResultat", "driftsresultat", "driftsinntekter", "salgsinntekter")),
     ("operating_expenses", ("resultatregnskapResultat", "driftsresultat", "driftskostnad", "sumDriftskostnad")),
+    ("payroll_costs", ("resultatregnskapResultat", "driftsresultat", "driftskostnad", "loennskostnad")),
     ("operating_result", ("resultatregnskapResultat", "driftsresultat", "driftsresultat")),
     ("net_financial_items", ("resultatregnskapResultat", "finansresultat", "nettoFinans")),
     ("profit_before_tax", ("resultatregnskapResultat", "ordinaertResultatFoerSkattekostnad")),
+    ("tax_expense", ("resultatregnskapResultat", "ordinaertResultatSkattekostnad")),
     ("net_result", ("resultatregnskapResultat", "aarsresultat")),
     ("total_assets", ("eiendeler", "sumEiendeler")),
     ("fixed_assets", ("eiendeler", "anleggsmidler", "sumAnleggsmidler")),
     ("current_assets", ("eiendeler", "omloepsmidler", "sumOmloepsmidler")),
+    ("cash_and_bank", ("eiendeler", "sumBankinnskuddOgKontanter")),
     ("equity", ("egenkapitalGjeld", "egenkapital", "sumEgenkapital")),
     ("total_debt", ("egenkapitalGjeld", "gjeldOversikt", "sumGjeld")),
     ("short_term_debt", ("egenkapitalGjeld", "gjeldOversikt", "kortsiktigGjeld", "sumKortsiktigGjeld")),
     ("long_term_debt", ("egenkapitalGjeld", "gjeldOversikt", "langsiktigGjeld", "sumLangsiktigGjeld")),
 )
+ACCOUNT_TYPE_TEXT = {"selskap": "company accounts", "konsern": "group accounts"}
 
 
-def fetch_accounts(client, env: Envelope) -> list[dict]:
-    """Latest normalized annual accounts (company and, when filed, group)."""
+def accounts_order(rows: list) -> list:
+    """Company accounts before group accounts, each newest period first (the API lists the oldest first)."""
+    rows = sorted(rows, key=lambda a: str(_get(a, "regnskapsperiode", "tilDato") or ""), reverse=True)
+    return sorted(rows, key=lambda a: (a.get("regnskapstype") or "SELSKAP").upper() != "SELSKAP")
+
+
+def fetch_accounts(client, env: Envelope, latest_year: str | None = None) -> list[dict]:
+    """Filed annual accounts the open API returns (currently the last three years; company and, when filed, group),
+    newest first, the newest period of each type marked `latest`. `latest_year` is the register's
+    sisteInnsendteAarsregnskap; when the accounts API does not yet return that year, the claim says so."""
     url = "%s/regnskapsregisteret/regnskap/%s" % (BRREG, env.orgnr)
     r = client.get(url, accept="application/json")
     snap = env.snapshot(r, "official_registry", "brreg_regnskap_json")
@@ -240,8 +253,8 @@ def fetch_accounts(client, env: Envelope) -> list[dict]:
         env.error("official.accounts", "invalid JSON: %s" % exc, url)
         env.claim("annual_accounts", "annual_accounts", None, [env.cite(snap)], "failed")
         return []
-    rows = data if isinstance(data, list) else [data]
-    out = []
+    rows = accounts_order([a for a in (data if isinstance(data, list) else [data]) if isinstance(a, dict)])
+    out, seen_type = [], set()
     for acc in rows:
         period = acc.get("regnskapsperiode") or {}
         p = "%s/%s" % (period.get("fraDato"), period.get("tilDato"))
@@ -250,20 +263,27 @@ def fetch_accounts(client, env: Envelope) -> list[dict]:
         values = {}
         for name, path in ACCOUNT_FIELDS:
             v = _get(acc, *path)
-            if isinstance(v, (int, float)):
+            if isinstance(v, (int, float)) and not isinstance(v, bool):
                 values[name] = v
         meta = {"accounts_type": kind, "currency": currency, "period_start": period.get("fraDato"),
-                "period_end": period.get("tilDato"),
+                "period_end": period.get("tilDato"), "latest": kind not in seen_type,
                 "not_audited": _get(acc, "revisjon", "ikkeRevidertAarsregnskap"),
                 "audit_opt_out": _get(acc, "revisjon", "fravalgRevisjon"),
                 "small_company_rules": _get(acc, "regnkapsprinsipper", "smaaForetak"),
-                "liquidation_accounts": acc.get("avviklingsregnskap")}
+                "liquidation_accounts": acc.get("avviklingsregnskap"), "filing_id": acc.get("journalnr")}
+        note = None
+        if meta["latest"] and kind == "selskap" and latest_year and str(period.get("tilDato") or "")[:4] < str(
+                latest_year):
+            note = ("the register lists accounts for %s as submitted; the open accounts API does not return them yet"
+                    % latest_year)
+        seen_type.add(kind)
         env.claim("annual_accounts", "accounts_period", meta,
-                  [env.cite(snap, "regnskapsperiode %s, %s, %s" % (p, kind, currency), "%s.periode" % kind)],
-                  reporting_period=p)
+                  [env.cite(snap, "regnskapsperiode %s, %s, %s, journalnr %s" % (p, kind, currency, acc.get(
+                      "journalnr")), "%s.periode" % kind)], reporting_period=p, note=note)
         for name, v in values.items():
             env.claim("annual_accounts", "%s" % name, {"amount": v, "currency": currency, "accounts_type": kind},
-                      [env.cite(snap, "%s: %s %s" % (name, v, currency), "%s.%s" % (kind, name))], reporting_period=p)
+                      [env.cite(snap, "%s: %s %s" % (name, v, currency), "%s %s.%s" % (kind, p, name))],
+                      reporting_period=p)
         out.append(dict(meta, values=values))
     if not out:
         env.claim("annual_accounts", "annual_accounts", None, [env.cite(snap, "empty list")], "not_available")
@@ -365,4 +385,5 @@ def official(client, env: Envelope) -> dict:
     if entity is None:
         return {"entity": None, "roles": [], "subunits": [], "accounts": [], "updates": {}}
     return {"entity": entity, "roles": fetch_roles(client, env), "subunits": fetch_subunits(client, env),
-            "accounts": fetch_accounts(client, env), "updates": fetch_updates(client, env)}
+            "accounts": fetch_accounts(client, env, entity.get("sisteInnsendteAarsregnskap")),
+            "updates": fetch_updates(client, env)}

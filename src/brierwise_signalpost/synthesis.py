@@ -6,6 +6,8 @@ from __future__ import annotations
 
 from collections import defaultdict
 
+from .official import ACCOUNT_TYPE_TEXT
+
 STATUS_TEXT = {"bankrupt": "The register marks it as bankrupt.",
                "liquidating": "The register marks it as being wound up (under liquidation).",
                "forced_dissolution": "The register marks it as under forced dissolution."}
@@ -28,6 +30,7 @@ def form_text(value: dict) -> str:
 
 
 def nok(v) -> str:
+    """A rounded amount in words (the currency is added by `money`)."""
     try:
         x = float(v)
     except (TypeError, ValueError):
@@ -42,6 +45,22 @@ def nok(v) -> str:
     else:
         s = "%.0f" % x
     return s
+
+
+def money(v: dict) -> str:
+    """Amount with the currency the accounts were filed in (some groups file in USD or EUR)."""
+    return "%s %s" % (v.get("currency") or "", nok(v.get("amount"))) if v.get("currency") else nok(v.get("amount"))
+
+
+def period_end(c: dict) -> str:
+    return str((c.get("reporting_period") or "").split("/")[-1])
+
+
+def latest_accounts(claims: list, kind: str = "selskap") -> list:
+    """Available accounts periods of one type, newest first."""
+    rows = [c for c in claims if c["field"] == "accounts_period" and c["availability"] == "available" and
+            (c["value"] or {}).get("accounts_type") == kind]
+    return sorted(rows, key=period_end, reverse=True)
 
 
 def clip(text: str, n: int = 240) -> str:
@@ -97,27 +116,66 @@ def synthesize(env) -> dict:
     if desc:
         say("self_description", "Its own website describes it as: «%s» (company-owned text, not independent)." %
             clip(desc["value"]), [desc])
-    # numbers
-    period = first("accounts_period")
-    if period:
-        p = period["reporting_period"]
+    # numbers: the newest company accounts (group accounts only when no company accounts were returned), with the
+    # previous year for comparison and the currency they were filed in
+    def value_of(f, kind, p):
+        return next((x for x in av(f) if x.get("reporting_period") == p and x["value"].get("accounts_type") == kind),
+                    None)
+
+    periods = latest_accounts(env.claims) or latest_accounts(env.claims, "konsern")
+    if periods:
+        period = periods[0]
+        kind, p = period["value"].get("accounts_type"), period["reporting_period"]
+        prior = periods[1] if len(periods) > 1 else None
         bits, used = [], [period]
-        for f, label in (("revenue", "revenue"), ("operating_result", "operating result"),
-                         ("net_result", "net result"), ("equity", "equity"), ("total_assets", "total assets")):
-            c = next((x for x in av(f) if x.get("reporting_period") == p), None)
-            if c:
-                bits.append("%s NOK %s" % (label, nok(c["value"]["amount"])))
-                used.append(c)
+        for f, label in (("revenue", "revenue"), ("payroll_costs", "payroll costs"),
+                         ("operating_result", "operating result"), ("net_result", "net result"), ("equity", "equity"),
+                         ("total_assets", "total assets")):
+            c = value_of(f, kind, p)
+            if not c:
+                continue
+            text = "%s %s" % (label, money(c["value"]))
+            used.append(c)
+            if prior and f in ("revenue", "net_result"):
+                b = value_of(f, kind, prior["reporting_period"])
+                if b and b["value"].get("currency") == c["value"].get("currency"):
+                    used.append(b)
+                    x, y = c["value"]["amount"], b["value"]["amount"]
+                    year = period_end(prior)[:4]
+                    if f == "revenue" and y > 0 and x >= 0:
+                        pct = round(100.0 * (x - y) / y)
+                        trend = "unchanged" if pct == 0 else ("up %d%%" % pct if pct > 0 else "down %d%%" % -pct)
+                        text += " (%s: %s, %s)" % (year, money(b["value"]), trend)
+                    else:
+                        text += " (%s: %s)" % (year, money(b["value"]))
+            bits.append(text)
         if bits:
-            text = "Latest filed accounts (%s, %s): %s." % (p.replace("/", " to "),
-                                                            period["value"].get("accounts_type", "company"),
-                                                            ", ".join(bits))
-            eq = next((x for x in av("equity") if x.get("reporting_period") == p), None)
+            text = "Latest filed %s (%s): %s." % (ACCOUNT_TYPE_TEXT.get(kind, kind), p.replace("/", " to "),
+                                                  ", ".join(bits))
+            eq = value_of("equity", kind, p)
             if eq and eq["value"]["amount"] < 0:
                 text += " Equity is negative."
             if period["value"].get("not_audited"):
                 text += " The accounts are not audited."
+            if period.get("note"):
+                text += " Note: %s." % period["note"]
+            years = sorted({period_end(c)[:4] for c in periods})
+            if len(years) > 1:
+                text += " The open accounts API returns %s for %s." % (ACCOUNT_TYPE_TEXT.get(kind, kind),
+                                                                       ", ".join(years))
             say("accounts", text, used)
+        group = latest_accounts(env.claims, "konsern") if kind == "selskap" else []
+        if group:
+            g, gp = group[0], group[0]["reporting_period"]
+            gbits, gused = [], [g]
+            for f, label in (("revenue", "revenue"), ("net_result", "net result"), ("equity", "equity")):
+                c = value_of(f, "konsern", gp)
+                if c:
+                    gbits.append("%s %s" % (label, money(c["value"])))
+                    gused.append(c)
+            if gbits:
+                say("accounts", "It also files group accounts as parent company (%s): %s." % (
+                    gp.replace("/", " to "), ", ".join(gbits)), gused)
     else:
         acc = by.get("annual_accounts", [])
         if acc:
@@ -220,13 +278,14 @@ FIELD_TEXT = {"legal_name": "legal name", "organisation_form": "legal form", "re
               "company_profile": "company-owned profile", "job_posting": "job ad", "dated_activity": "dated item", "register_event": "register event",
               "public_brand": "public brand", "revenue": "revenue", "operating_result": "operating result",
               "net_result": "net result", "equity": "equity", "total_assets": "total assets",
-              "total_debt": "total debt", "profit_before_tax": "profit before tax"}
+              "total_debt": "total debt", "profit_before_tax": "profit before tax", "payroll_costs": "payroll costs",
+              "sales_revenue": "sales revenue", "cash_and_bank": "cash and bank deposits", "tax_expense": "tax expense"}
 
 
 def _short(v) -> str:
     if isinstance(v, dict):
         if v.get("amount") is not None:
-            return "NOK " + nok(v["amount"])
+            return money(v)
         if v.get("event"):
             return "%s %s" % (v.get("date") or "", v["event"])
         bits = [str(v[k]) for k in ("role", "name", "title", "platform", "url", "label", "address") if v.get(k)]

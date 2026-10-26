@@ -11,6 +11,8 @@ from __future__ import annotations
 
 import json
 
+from .official import ACCOUNT_FIELDS as _ACCOUNTS
+
 # field -> how to identify one fact inside a multi-valued field (None: single-valued field)
 MATERIAL = {
     "legal_name": None, "organisation_form": None, "registry_status": None, "business_address": None,
@@ -23,8 +25,7 @@ MATERIAL = {
     "dated_activity": lambda v: (v.get("date"), v.get("title")),
     "register_event": lambda v: (v.get("date"), v.get("event")),
 }
-ACCOUNT_FIELDS = {"revenue", "operating_result", "net_result", "equity", "total_assets", "total_debt",
-                  "profit_before_tax"}
+ACCOUNT_FIELDS = {name for name, _ in _ACCOUNTS}      # one fact per (field, accounts type, reporting period)
 # field -> the claim whose failed or blocked state in this run means the field could not be re-checked
 SOURCE_OF = {"official_website": "official_website", "public_brand": "official_website",
              "company_profile": "official_website", "dated_activity": "official_website"}
