@@ -41,9 +41,9 @@ DATE_RE = re.compile(r"\b(20[0-3]\d)-(0[1-9]|1[0-2])-(0[1-9]|[12]\d|3[01])")
 
 
 def orgnr_patterns(orgnr: str) -> re.Pattern:
-    d = orgnr
-    sep = r"[\s \.\-]?"
-    return re.compile(r"(?<!\d)%s%s%s%s%s(?!\d)" % (d[:3], sep, d[3:6], sep, d[6:]))
+    """The nine digits with at most one space, dot or dash between any two of them («923 609 016», «976 76 5524»)."""
+    sep = r"[\s\u00a0\.\-]?"
+    return re.compile(r"(?<!\d)%s(?!\d)" % sep.join(orgnr))
 
 
 def fold(s: str) -> str:
@@ -334,7 +334,7 @@ FREE_MAIL = {"gmail.com", "googlemail.com", "hotmail.com", "hotmail.no", "outloo
              "mail.com", "email.com", "tele2.no", "chello.no", "bluezone.no", "haugnett.no", "enivest.net",
              "nextgentel.com", "ebnett.no", "vikenfiber.no", "fiberby.no", "networks.no", "sensewave.com", "tdc.no",
              "netcom.no", "globalconnect.no", "hotmail.co.uk", "yahoo.co.uk", "mail.ru", "yandex.ru", "qq.com"}
-STREET_NUM = re.compile(r"^(?P<street>[a-z][a-z .'-]{2,}?)\.?\s+(?P<num>\d{1,4})\s?(?P<letter>[a-z]?)\b")
+STREET_NUM = re.compile(r"^(?P<street>[a-z][a-z .'-]{1,}?)\.?\s+(?P<num>\d{1,4})\s?(?P<letter>[a-z]?)\b")
 
 
 def fold_map(text: str) -> tuple[str, list[int]]:
@@ -372,7 +372,7 @@ def address_keys(entity: dict) -> list[tuple]:
             if not fl or not pn or fl.startswith(("postboks", "pb ", "pb.", "boks ", "c/o", "postb")):
                 continue
             m = STREET_NUM.match(fl)
-            if m and len(m.group("street").strip()) >= 4:
+            if m and len(m.group("street").strip()) >= 2:    # short names exist («Sæ 20»); postcode and name still needed
                 letter = m.group("letter")
                 rx = re.compile(r"(?<![a-z])%s\.?\s*%s%s(?![0-9a-z])" % (
                     re.escape(m.group("street").strip()), m.group("num"), r"\s?" + letter if letter else ""))
@@ -408,8 +408,35 @@ def scan_page(text: str, pat: re.Pattern, keys: list) -> tuple:
         for rx, pn in keys:
             hm = rx.search(folded)
             if hm and re.search(r"(?<!\d)%s(?!\d)" % pn, folded):
-                return "address", quote(text, idx[hm.start()], idx[hm.end() - 1] + 1, 40, 25)
+                return "address", quote(text, idx[hm.start()], idx[hm.end() - 1] + 1, 0, 25)
     return None, None
+
+
+def profile_url(url: str) -> str:
+    """Canonical profile address: without query and fragment, except Facebook's numeric «profile.php?id=…»."""
+    p = urlsplit(url)
+    if p.path.rstrip("/").endswith("profile.php"):
+        q = "&".join(x for x in p.query.split("&") if x.startswith("id="))
+        return urlunsplit((p.scheme, p.netloc, p.path, q, ""))
+    return url.split("?")[0].split("#")[0].rstrip("/")
+
+
+def self_names(page: Page) -> list[str]:
+    """Names a site gives itself: og:site_name and JSON-LD Organization names."""
+    names = [page.meta.get("og:site_name") or ""]
+    names += [it["name"] for it in jsonld_items(page.jsonld)
+              if types_of(it) & {"organization", "corporation", "localbusiness"} and isinstance(it.get("name"), str)]
+    return [n.strip() for n in names if n and n.strip()]
+
+
+def other_entity(page: Page, legal_name: str) -> str | None:
+    """A self-name with a legal form («Nortrans AS») that is not this company's name: the site belongs to, or is shared
+    with, another legal entity (parent, sister, brand company), so name and address alone prove nothing."""
+    own = fold(name_core(legal_name))
+    for n in self_names(page):
+        if LEGAL_SUFFIX.search(n) and fold(name_core(n)) != own:
+            return n
+    return None
 
 
 def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, extra: list | None = None,
@@ -437,7 +464,7 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         if raw_hp and register_snap and rx.match(hp_url):
             # The company gave a platform page as its website: a declared own profile; the platform is not fetched.
             env.claim("website_profiles", "company_profile",
-                      {"platform": plat, "url": hp_url.split("?")[0].rstrip("/")},
+                      {"platform": plat, "url": profile_url(hp_url)},
                       [env.cite(register_snap, "hjemmeside: %s" % raw_hp, "hjemmeside")], confidence=0.95,
                       note="given by the company as its website in the register; the platform page was not fetched")
             registry = None
@@ -493,6 +520,7 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         if origin not in DECLARED and NOT_OWN.search(final_host):
             continue                                   # a redirect to a directory, marketplace or social platform
         named_text = fold(page.title + " " + page.text[:20000])
+        home_text = named_text
         kind, span = scan_page(page.text, pat, keys)
         proof_snap = snap if kind else None
         if kind != "orgnr":
@@ -519,21 +547,26 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
                 if kind == "orgnr":
                     break
         named = bool(tokens) and all(t in named_text for t in tokens[:3])
+        named_home = bool(tokens) and all(t in home_text for t in tokens[:3])
         declared = origin in DECLARED
+        other = other_entity(page, name)               # the site calls itself by another legal entity's name
+        # A sole proprietorship often carries a person's name and sits at an employer's or agency's address: only its
+        # organisation number on the site ties a site to it.
+        weak_ok = ((entity.get("organisasjonsform") or {}).get("kode") or "") not in ("ENK",) and not other
         if kind == "orgnr" and (declared or named):
             proof, conf = "organisation number shown on the site", 0.99
-        elif kind == "orgnr_shared" and declared and origin != "subunit_listed":
+        elif kind == "orgnr_shared" and declared and origin != "subunit_listed" and weak_ok:
             proof, conf = "organisation number shown on the site next to other companies' numbers", 0.9
-        elif kind == "address" and named and same_domain and origin != "name_short":
+        elif kind == "address" and named and same_domain and origin != "name_short" and weak_ok:
             proof, conf = "the site names the company and shows its registered street address", 0.9
-        elif declared and origin != "subunit_listed" and same_domain and named:
+        elif declared and origin != "subunit_listed" and same_domain and named_home and weak_ok:
             proof, conf = DECLARED[origin] + "; site names the company", 0.85
         else:
             if origin == "registry_listed":
+                why_not = ("presents itself as «%s», another legal entity," % other if other else
+                           "redirects to %s" % final_host if not same_domain else "does not name the company")
                 deferred = ("ambiguous", [env.cite(snap, (page.title or "")[:160], "homepage")],
-                            "%s, but the site %s and shows no organisation number" % (
-                                DECLARED[origin], "redirects to %s" % final_host if not same_domain
-                                else "does not name the company"), 0.4)
+                            "%s, but the site %s and shows no organisation number" % (DECLARED[origin], why_not), 0.4)
             continue                                   # no proof: never published
         ev = [env.cite(snap, (page.title or "")[:160], "homepage")]
         if proof_snap is not None and span:
@@ -575,7 +608,10 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
             if types_of(it) & {"organization", "localbusiness", "corporation"} and isinstance(it.get("name"), str):
                 brand, how = it["name"], "JSON-LD Organization name"
                 break
-    if brand and len(brand.strip()) >= 2 and fold(brand.strip()) not in GENERIC_BRAND:
+    other = LEGAL_SUFFIX.search(brand or "") and fold(name_core(brand)) != fold(name_core(env.legal_name or ""))
+    looks_like_domain = re.match(r"^(https?://)?(www\.)?[\w-]+(\.[a-z]{2,})+/?$", (brand or "").strip(), re.I)
+    if brand and len(brand.strip()) >= 2 and fold(brand.strip()) not in GENERIC_BRAND and not other \
+            and not looks_like_domain:
         env.claim("legal_identity", "public_brand", brand.strip()[:120], [env.cite(snap, brand.strip()[:120], how)],
                   confidence=0.9, note="name the verified company website uses for itself")
     profiles = {}
@@ -594,7 +630,7 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
                 if any(m and (m in slug or slug.strip("/@") in m) for m in marks if len(m) >= 3):
                     profiles[plat] = (link, "outbound link on the company site")
     for plat, (url, how) in sorted(profiles.items()):
-        env.claim(sec, "company_profile", {"platform": plat, "url": url.split("?")[0].rstrip("/")},
+        env.claim(sec, "company_profile", {"platform": plat, "url": profile_url(url)},
                   [env.cite(snap, url, "company_profile: " + how)], confidence=0.95,
                   note="linked from the verified company website (%s)" % how)
     mails = sorted({l[7:].split("?")[0].lower() for l, _ in page.links if l.lower().startswith("mailto:")})

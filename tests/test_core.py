@@ -60,6 +60,16 @@ class Core(unittest.TestCase):
         self.assertNotIn(("holmestrand.no", "short"), guess_domains("HOLMESTRAND MEDISINSKE SENTER AS"))
         self.assertFalse(useful_item("Hello world!", "2026-01-01"))
 
+    def test_other_entity_and_profiles(self):
+        from brierwise_signalpost.website import Page, other_entity, profile_url
+        p = Page("https://nhtrans.no/")
+        p.feed('<html><head><meta property="og:site_name" content="Nortrans AS"></head><body>x</body></html>')
+        self.assertEqual(other_entity(p, "NORDHORDLAND TRANSPORTKONTOR AS"), "Nortrans AS")
+        self.assertIsNone(other_entity(p, "NORTRANS AS"))
+        self.assertEqual(profile_url("https://www.facebook.com/profile.php?id=123&ref=x"),
+                         "https://www.facebook.com/profile.php?id=123")
+        self.assertEqual(profile_url("https://www.instagram.com/ellashage/?hl=nb"), "https://www.instagram.com/ellashage")
+
     def test_batch_formats(self):
         import json
         import os
