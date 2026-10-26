@@ -42,6 +42,7 @@ Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 | Layer | Source | Rights | Identity rule |
 |---|---|---|---|
 | Legal identity, roles, workplaces | Brønnøysund Enhetsregisteret API | NLOD 2.0 | anchor |
+| Dated register events, monthly employee counts | Enhetsregisteret update stream (`oppdateringer/enheter` with JSON patches, last 13 months) | NLOD 2.0 | anchor; contact fields in the patches are ignored |
 | Annual accounts | Brønnøysund Regnskapsregisteret API | NLOD 2.0 | anchor |
 | Job ads | Nav job vacancy feed (pam-stilling-feed, public token fetched at run time) | Nav API terms: free use and republication, inactive ads removed | employer organisation number equals the company or one of its registered subunits |
 | Website, own profiles, careers, dated items | the company's own website (pages, JSON-LD, RSS/Atom, WordPress posts API), robots.txt respected | company-owned | see "Identity gates" below; otherwise unpublished, a failing register entry is `ambiguous` |
@@ -103,7 +104,8 @@ entity (which lists the same site), and a law firm's site listed by a lawyer's s
 show the organisation number (12), the company name with the registered street address (9) or are declared by the
 company and name it on the home page (2). A rerun with `--previous` produced no false changes. Most companies in the
 universe are holding, property and housing entities without a website of their own; for them the envelope says so
-explicitly.
+explicitly. The register update stream gave dated register events for 100 of 100 companies of sample 2 (at least the
+filing of the 2025 accounts) and a monthly employee series for all 14 that report employees.
 
 Known gaps: Regnskapsregisteret answered HTTP 503 for every request during the local runs (25–26 October 2026), so
 the accounts section is `failed` there and the run report shows it; sites whose TLS certificate chain cannot be

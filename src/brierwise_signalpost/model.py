@@ -96,7 +96,10 @@ class Envelope:
             "extraction": snap["extraction"],
         }
         if claim_span is not None:
-            ev["claim_span"] = redact(str(claim_span))[:400]
+            # Register spans are built from chosen fields (never phone or e-mail) and hold amounts and ids that look
+            # like phone numbers; only text quoted from web pages and ads is masked.
+            span = str(claim_span) if snap["source_class"] == "official_registry" else redact(str(claim_span))
+            ev["claim_span"] = span[:400]
         if locator:
             ev["locator"] = locator
         self.evidence.append(ev)

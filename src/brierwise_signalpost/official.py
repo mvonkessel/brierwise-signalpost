@@ -347,7 +347,7 @@ def fetch_updates(client, env: Envelope, months: int = 13, limit: int = 10) -> d
     for date, text, path, uid, s in sorted(events, key=lambda x: (x[0], x[3] or 0), reverse=True)[:limit]:
         env.claim("hiring_activity", "register_event", {"date": date, "event": text,
                                                          "source": "Brønnøysund Register Centre, register update"},
-                  [env.cite(s, "oppdateringsid %s, %s: %s" % (uid, date, path), "oppdatering")],
+                  [env.cite(s, "%s %s" % (date, path), "oppdateringsid %s" % uid)],
                   effective_date=date, note="dated change of the official register entry")
     if staff:
         staff.sort(key=lambda x: x[0])
