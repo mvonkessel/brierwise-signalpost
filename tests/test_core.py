@@ -346,6 +346,72 @@ class Core(unittest.TestCase):
                          [("payroll_costs", "changed", "2024"), ("revenue", "added", "2025")])
         self.assertEqual(sorted(h["claim"]["reporting_period"][:4] for h in history), ["2023", "2024"])
 
+    def test_news_listing_items(self):
+        from datetime import date, timedelta
+        from brierwise_signalpost.website import listing_items, text_dates
+        d1, d2, d3 = (date.today() - timedelta(days=n) for n in (3, 40, 90))
+        no = "%d. %s %d" % (d2.day, ["januar", "februar", "mars", "april", "mai", "juni", "juli", "august", "september",
+                                     "oktober", "november", "desember"][d2.month - 1], d2.year)
+        html = """<html><body><nav><ul><li><a href="/om-oss">Om oss og vår historie</a> 01.01.2026</li></ul></nav>
+        <div class="news-list">
+          <article><h2><a href="/nyheter/ny-avdeling-i-bergen">Vi åpner ny avdeling i Bergen</a></h2>
+            <time datetime="%s">x</time><p>Tekst</p></article>
+          <div class="news-item"><h3>Ny daglig leder fra årsskiftet</h3><span>%s</span>
+            <a href="/nyheter/ny-daglig-leder">Les mer</a></div>
+          <li><a href="/nyheter/to-datoer">Arrangement med to datoer i samme blokk</a> %s og %s</li>
+          <li><a href="/nyheter/">Alle nyheter</a> %s</li>
+          <a class="card" href="/nyheter/sommerfest"><div class="card-body"><h3>Sommerfest for alle ansatte</h3>
+            <time datetime="%sT10:00:00+02:00"></time></div></a>
+          <li><a href="https://annen.no/sak">Sak på et annet nettsted om firmaet</a> %s</li>
+        </div></body></html>""" % (d1.isoformat(), no, d1.strftime("%d.%m.%Y"), d2.strftime("%d.%m.%Y"),
+                                   d1.strftime("%d.%m.%Y"), d3.isoformat(), d1.strftime("%d.%m.%Y"))
+        env = Envelope("923609016", {})
+        snap = {"source_url": "https://firma.no/nyheter", "source_class": "company_owned", "retrieved_at": "t",
+                "content_sha256": "h", "extraction": "html"}
+        self.assertEqual(listing_items(env, snap, html, "https://firma.no/nyheter"), 3)
+        got = [(c["value"]["date"], c["value"]["title"], c["value"]["url"]) for c in env.claims]
+        self.assertEqual(got, [(d1.isoformat(), "Vi åpner ny avdeling i Bergen",
+                                "https://firma.no/nyheter/ny-avdeling-i-bergen"),
+                               (d2.isoformat(), "Ny daglig leder fra årsskiftet",
+                                "https://firma.no/nyheter/ny-daglig-leder"),
+                               (d3.isoformat(), "Sommerfest for alle ansatte", "https://firma.no/nyheter/sommerfest")])
+        self.assertEqual(listing_items(env, snap, html, "https://firma.no/nyheter"), 0)   # nothing twice
+        self.assertEqual([d for d, _ in text_dates("12. okt. 2026, October 3, 2026, 2026-01-05, 31.02.2026")],
+                         ["2026-10-12", "2026-10-03", "2026-01-05"])
+
+    def test_news_listing_parts_tags_and_home_page(self):
+        from datetime import date, timedelta
+        from brierwise_signalpost.website import listing_items
+        d = date.today() - timedelta(days=5)
+        # parts of a card (title, meta, date) are not cards of their own; a category link is never the item
+        blog = """<div class="blog-grid"><div class="blog-single columns">
+          <a class="image" href="/post/hvilken-bilinnredning"></a>
+          <div class="blog-single__title"><a href="/post/hvilken-bilinnredning">Hvilken bilinnredning er best?</a></div>
+          <div class="blog-single__meta"><a href="/blog/tips_and_guides" class="b-category">Tips og Guider</a> %s</div>
+        </div></div>""" % d.isoformat()
+        # a card that is one link, with a tag and a short date in its text and the headline in a title element
+        card = """<a class="knowledgehub-item" href="/info-hub/inside/zaptec-open"><div class="card">
+          <div class="card-content"><div class="flex items-center"><span class="tag">Inside Zaptec</span>
+          <time datetime="%s">%s</time></div><p class="card-title">Zaptec Open: a day on the course</p></div></div></a>
+          """ % (d.isoformat(), d.strftime("%d.%m.%y"))
+        tour = """<div class="tour-card"><a href="/yorkshire-dales/">Yorkshire Dales vandretur</a> %s</div>""" % \
+            d.strftime("%d.%m.%Y")
+        snap = {"source_url": "https://firma.no/", "source_class": "company_owned", "retrieved_at": "t",
+                "content_sha256": "h", "extraction": "html"}
+        env = Envelope("923609016", {})
+        self.assertEqual(listing_items(env, snap, blog + card, "https://firma.no/blog"), 2)
+        self.assertEqual(sorted(c["value"]["title"] for c in env.claims),
+                         ["Hvilken bilinnredning er best?", "Zaptec Open: a day on the course"])
+        env = Envelope("923609016", {})
+        self.assertEqual(listing_items(env, snap, card + tour, "https://firma.no/", home=True), 1)   # no tour date
+        self.assertEqual(listing_items(Envelope("923609016", {}), snap, tour, "https://firma.no/tilbud"), 1)
+        # a container whose cards are not recognised as blocks: its one date belongs to one of two items, so no item
+        many = """<section class="news"><a class="selected-news-extended" href="/nyheter/multiconsult">
+          <h3>Multiconsult samler kontorene</h3><p>Tekst uten dato</p></a>
+          <a class="selected-news-extended" href="/nyheter/coop"><h3>Coop Norge inngår leieavtale</h3>
+          <p>(Oslo, %s) Coop Norge har inngått</p></a></section>""" % d.strftime("%d.%m.%Y")
+        self.assertEqual(listing_items(Envelope("923609016", {}), snap, many, "https://firma.no/nyheter"), 0)
+
 
 if __name__ == "__main__":
     unittest.main()

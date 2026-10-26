@@ -62,7 +62,7 @@ Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 | Dated register events, monthly employee counts | Enhetsregisteret update stream (`oppdateringer/enheter` with JSON patches, last 13 months) | NLOD 2.0 | anchor; contact fields in the patches are ignored |
 | Annual accounts | Brønnøysund Regnskapsregisteret API (`regnskap/{orgnr}`: the filed accounts of the last three years, company and group) | NLOD 2.0 | anchor; every figure is copied as filed, with its currency (some groups file in USD or EUR), period and filing id; nothing is computed into a claim |
 | Job ads | Nav job vacancy feed (pam-stilling-feed, public token fetched at run time): every ad active in the changes of the last 200 days is read in full once per run, in a background thread | Nav API terms: free use and republication, inactive ads removed | employer organisation number equals the company or one of its registered subunits (matched by number only, never by name) |
-| Website, own profiles, careers, dated items | the company's own website (pages, JSON-LD, RSS/Atom, WordPress posts API), robots.txt respected | company-owned | see "Identity gates" below; otherwise unpublished, a failing register entry is `ambiguous` |
+| Website, own profiles, careers, dated items | the company's own website (pages, JSON-LD, RSS/Atom, WordPress posts API, news listings), robots.txt respected | company-owned | see "Identity gates" below; otherwise unpublished, a failing register entry is `ambiguous` |
 
 ### Identity gates for a website
 
@@ -108,6 +108,13 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
   taken for «KAI MARKETING AS»), at most two accounts per platform, the same account only once whatever scheme, host
   or case the link uses, LinkedIn pages in their canonical form `/company/<name>`; or when the company gives the
   profile as its website in the register. No platform is scraped.
+- Dated items from the verified site: JSON-LD articles on its news page, its RSS/Atom feed, the WordPress posts API,
+  and news listings: a block (article, list item, or a card whose class names a news item, post or card) with
+  exactly one date, its `<time datetime>` or the one full date printed in it, and a title (heading or title
+  element, else the link text without dates) that links to another page of the same site. Category and tag links
+  never count, blocks with two different dates are skipped, and on the home page, where offers and events carry
+  dates too, only blocks with a `<time datetime>` or a link to a news-like path count. Up to five items per
+  source, each URL once, dates within the last three years and at most a week ahead.
 - Web search is optional: only when the evaluator supplies `BRAVE_SEARCH_API_KEY`, one query per company without a
   registered website (`"<name>" <town>`) proposes candidate domains; results are never evidence, a candidate passes
   the same identity gates as any other (organisation number, or name plus registered street address on its own
@@ -198,6 +205,15 @@ website carries its brand, names its daily manager and uses the company's own e-
 scale sample (seed 20261028), v0.5.0 verified 144 websites instead of 136 in 462 s with 12 workers: 7 by gate 6 and one
 that answered this time. Each new site was reviewed by hand; the review removed an eighth, whose title and footer name a
 sister company at the same address, by the title rule of gate 6.
+
+Dated items from news listings (v0.6.0). On Builderr's public sample, 73 companies have a verified website, but
+v0.5.0 found dated items for only 15: it read 35 news pages, and 24 of them gave nothing because they carry neither
+JSON-LD nor a feed. v0.6.0 also reads news listings and found dated items for 25 companies (117 items, at most five
+per source); no company lost any. Every new item was reviewed by hand against its page. The review of a first
+version found an offer with a departure date on a home page, a category link taken for the post, titles that
+carried the category and the date (parts of a card had counted as cards of their own), and a container whose one
+date belonged to another item than its first heading; the rules above remove all of these, and checked again on
+the same pages they keep every correct item.
 
 The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
 October 2026; 20 parallel reads, at most 50 per second).
