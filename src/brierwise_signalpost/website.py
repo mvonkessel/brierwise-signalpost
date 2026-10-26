@@ -891,7 +891,10 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
                                       effective_date=(it.get("datePosted") or "")[:10] or None)
                             hiring += 1
                 else:
-                    activity += news_items(env, ss, pg, rr.final_url)
+                    n = news_items(env, ss, pg, rr.final_url)
+                    if not n and pg is not None:
+                        n = listing_items(env, ss, rr.text(), rr.final_url)
+                    activity += n
                 break
     for feed in (page.feeds or [])[:1]:
         rr, ss, why = site.get(feed)
@@ -903,6 +906,8 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
         rr, ss, why = site.get(root + "/wp-json/wp/v2/posts?per_page=5&_fields=date,title,link")
         if rr is not None and rr.ok:
             activity += wp_posts(env, ss, rr)
+    if not activity:
+        activity += listing_items(env, snap, r.text(), r.final_url, home=True)   # latest news on the home page
     return {"profiles": len(profiles), "hiring": hiring, "activity": activity}
 
 
@@ -993,7 +998,7 @@ def feed_items(env: Envelope, snap, xml: str, limit: int = 5) -> int:
                 except (TypeError, ValueError):
                     m = DATE_RE.search(raw)
                     date = m.group(0) if m else None
-        if title and date and useful_item(title, date):
+        if title and date and useful_item(title, date) and (link or "").split("#")[0] not in activity_urls(env):
             env.claim("hiring_activity", "dated_activity", {"date": date, "title": title[:200], "url": link,
                                                             "source": "company website feed"},
                       [env.cite(snap, "%s %s" % (date, title[:200]), "RSS/Atom item")], effective_date=date)
@@ -1001,3 +1006,232 @@ def feed_items(env: Envelope, snap, xml: str, limit: int = 5) -> int:
             if n >= limit:
                 break
     return n
+
+
+def activity_urls(env: Envelope) -> set:
+    return {str((c.get("value") or {}).get("url") or "").split("#")[0] for c in env.claims
+            if c["field"] == "dated_activity" and c["availability"] == "available"} - {""}
+
+
+MONTH_WORD = (r"(jan(?:uar|uary)?|feb(?:ruar|ruary)?|mar(?:s|ch)?|apr(?:il)?|mai|may|jun[ei]?|jul[iy]?|aug(?:ust)?|"
+              r"sep(?:t|tember)?|o[ck]t(?:ober)?|nov(?:ember)?|de[sc](?:ember)?)")
+MONTH_NO = {"jan": 1, "feb": 2, "mar": 3, "apr": 4, "mai": 5, "may": 5, "jun": 6, "jul": 7, "aug": 8, "sep": 9,
+            "okt": 10, "oct": 10, "nov": 11, "des": 12, "dec": 12}
+TEXT_DATES = (
+    (re.compile(r"(?<![\d.])(0?[1-9]|[12]\d|3[01])\.\s?(0?[1-9]|1[0-2])\.\s?(20[0-3]\d)(?!\d)"), "dmy"),
+    (re.compile(r"(?<![\d.])(0?[1-9]|[12]\d|3[01])\.?\s+" + MONTH_WORD + r"\.?,?\s+(20[0-3]\d)(?!\d)", re.I), "dMy"),
+    (re.compile(r"\b" + MONTH_WORD + r"\.?\s+(0?[1-9]|[12]\d|3[01]),?\s+(20[0-3]\d)(?!\d)", re.I), "Mdy"),
+    (DATE_RE, "ymd"),
+)
+
+
+def text_dates(text: str) -> list[tuple[str, str]]:
+    """Full dates printed in a text («12.10.2026», «12. oktober 2026», «October 12, 2026», «2026-10-12») as ISO."""
+    from datetime import date as _date
+    out = []
+    for rx, kind in TEXT_DATES:
+        for m in rx.finditer(text):
+            g = m.groups()
+            try:
+                if kind == "dmy":
+                    d = _date(int(g[2]), int(g[1]), int(g[0]))
+                elif kind == "dMy":
+                    d = _date(int(g[2]), MONTH_NO[fold(g[1])[:3]], int(g[0]))
+                elif kind == "Mdy":
+                    d = _date(int(g[2]), MONTH_NO[fold(g[0])[:3]], int(g[1]))
+                else:
+                    d = _date(int(g[0]), int(g[1]), int(g[2]))
+            except (ValueError, KeyError):
+                continue
+            out.append((d.isoformat(), m.group(0)))
+    return out
+
+
+class Listing(HTMLParser):
+    """Blocks of a news or blog listing: article and li elements, and div, section or a elements with a class or id token
+    that ends in a word for a news item or card («news-item», «blog-single», «card», «post-123»; not «card-content»,
+    «t2-post-title» or the utility «items-center»). Each block keeps its links (with their class), headings and title
+    elements, <time datetime> values and visible text."""
+    VOID = {"area", "base", "br", "col", "embed", "hr", "img", "input", "link", "meta", "param", "source", "track",
+            "wbr"}
+    SKIP = {"script", "style", "noscript", "template", "nav", "svg", "select"}
+    ITEM_TOKEN = re.compile(r"^[a-z0-9_-]*?(news|nyhet|nyheter|post|item|card|entry|article|artikkel|teaser|blog|innlegg|"
+                            r"aktuelt|story|stories)(?:[-_]+(item|card|single|entry|teaser|preview|summary|block|box|"
+                            r"wrap|wrapper|container|tile))?(?:[-_]*\d+)?s?$", re.I)
+    TITLE_TOKEN = re.compile(r"(title|heading|headline|tittel|overskrift)$", re.I)
+
+    def __init__(self, base: str):
+        super().__init__(convert_charrefs=True)
+        self.base = base
+        self.blocks: list[dict] = []
+        self._stack: list[tuple[str, int | None, bool]] = []
+        self._skip = None                     # stack depth at which a skipped element (script, nav ...) began
+        self._href = None
+        self._acls = ""
+        self._atext: list[str] = []
+        self._a_from = 0
+        self._head = None                     # [text parts, href] inside h1-h4 or a title element
+
+    def _block(self):
+        for _, b, _ in reversed(self._stack):
+            if b is not None:
+                return self.blocks[b]
+        return None
+
+    def handle_starttag(self, tag, attrs):
+        if tag in self.VOID:
+            return
+        a = {k: (v or "") for k, v in attrs}
+        tokens = (a.get("class", "") + " " + a.get("id", "")).split()
+        b, head = None, False
+        if self._skip is None and tag in self.SKIP:
+            self._skip = len(self._stack)
+        if self._skip is None:
+            if tag in ("article", "li") or (tag in ("div", "section", "a") and
+                                            any(self.ITEM_TOKEN.match(x) for x in tokens)):
+                self.blocks.append({"links": [], "heads": [], "times": [], "text": []})
+                b = len(self.blocks) - 1
+            blk = self.blocks[b] if b is not None else self._block()
+            if tag == "a" and a.get("href"):
+                self._href, self._acls, self._atext = urljoin(self.base, a["href"].strip()), a.get("class", ""), []
+                self._a_from = len(self.blocks)
+            elif self._head is None and (tag in ("h1", "h2", "h3", "h4") or
+                                         (tag != "a" and any(self.TITLE_TOKEN.search(x) for x in tokens))):
+                self._head, head = [[], None], True
+            elif tag == "time" and a.get("datetime") and blk is not None:
+                m = DATE_RE.search(a["datetime"])
+                if m:
+                    blk["times"].append((m.group(0), a["datetime"]))
+        self._stack.append((tag, b, head))
+
+    def handle_endtag(self, tag):
+        if tag in self.VOID or not any(t == tag for t, _, _ in self._stack):
+            return
+        while self._stack:
+            t, _, head = self._stack[-1]
+            self._close(t, head)
+            self._stack.pop()
+            if self._skip is not None and len(self._stack) <= self._skip:
+                self._skip = None
+            if t == tag:
+                break
+
+    def _close(self, t, head):
+        if self._skip is not None:
+            return
+        if t == "a" and self._href is not None:
+            link = (self._href, " ".join(" ".join(self._atext).split()), self._acls)
+            blk = self._block()
+            if blk is not None:
+                blk["links"].append(link)
+            for nb in self.blocks[self._a_from:]:
+                if nb is not blk and not nb["links"]:
+                    nb["links"].append(link)          # a card that is one link as a whole
+            if self._head is not None and self._head[1] is None:
+                self._head[1] = self._href
+            self._href = None
+        elif head and self._head is not None:
+            text = " ".join(" ".join(self._head[0]).split())
+            blk = self._block()
+            if blk is not None and text:
+                blk["heads"].append((text, self._head[1]))
+            self._head = None
+
+    def handle_data(self, data):
+        if self._skip is not None:
+            return
+        if self._href is not None:
+            self._atext.append(data)
+        if self._head is not None:
+            self._head[0].append(data)
+        blk = self._block()
+        if blk is not None:
+            blk["text"].append(data)
+
+
+GENERIC_LINK = re.compile(r"^(les mer|les hele (saken|artikkelen|innlegget)|les videre|mer|more|read more|read on|se mer|"
+                          r"vis mer|vis alle|se alle|alle nyheter|continue reading|fortsett å lese|klikk her|click here|"
+                          r"\W*)\W*$", re.I)
+NOT_ITEM = re.compile(r"/(tag|tags|stikkord|category|categories|kategori|kategorier|author|forfatter|page|side)/|"
+                      r"[?&](page|side|p)=\d", re.I)
+TAG_LINK = re.compile(r"(categor|kategori|(^|[-_\s])tags?($|[-_\s])|label|badge|chip)", re.I)
+NEWS_PATH = re.compile(r"(/|-)(nyhet|nyheter|aktuelt|news|blogg?|presse|press|artikler|artikkel|articles?|posts?|"
+                       r"innlegg|stories|story|saker|sak|insights?|info-hub|pressemelding\w*|press-releases?)(/|-|$)|"
+                       r"/20[0-3]\d/(0?[1-9]|1[0-2])/|20[0-3]\d-(0[1-9]|1[0-2])-", re.I)
+SHORT_DATE = re.compile(r"(?<![\d.])(0?[1-9]|[12]\d|3[01])\.(0?[1-9]|1[0-2])\.(\d{2})(?![\d.])")
+
+
+def own_item_page(href: str, host: str, here: str) -> bool:
+    s = urlsplit(href)
+    path = s.path.rstrip("/")
+    return s.scheme in ("http", "https") and site_key(s.hostname) == host and path not in ("", here) \
+        and not NOT_ITEM.search(href) and not re.search(r"\.(jpe?g|png|gif|webp|svg|css|js|zip)$", path, re.I)
+
+
+def good_title(t: str) -> bool:
+    return len(t) >= 12 and len(t.split()) >= 2 and not GENERIC_LINK.match(t) and \
+        len(re.sub(r"[\W\d_]", "", t)) >= 8
+
+
+def listing_items(env: Envelope, snap, html_text: str, url: str, limit: int = 5, home: bool = False) -> int:
+    """Dated items of a news or blog listing on the verified site, for sites without feed or JSON-LD: a block with
+    exactly one date (its <time datetime>, else the one full date printed in it), links to exactly one other page of
+    the same site, and a title (its heading or title element, else the link text without dates); category and tag
+    links never count. Blocks with two different dates or links to several pages are skipped rather than guessed. On the home page (home=True), where
+    offers and events carry dates too, only blocks with a <time datetime> or a link to a news-like path count."""
+    p = Listing(url)
+    try:
+        p.feed(html_text)
+        p.close()
+    except Exception:
+        return 0
+    host, here = site_key(urlsplit(url).hostname), urlsplit(url).path.rstrip("/")
+    seen, items = activity_urls(env), []
+    for b in p.blocks:
+        links = [(h, t) for h, t, cls in b["links"] if own_item_page(h, host, here) and not TAG_LINK.search(cls)]
+        if not links:
+            continue
+        dates = {iso: (raw, "time element") for iso, raw in b["times"]}
+        if not dates:
+            dates = {iso: (raw, "printed date") for iso, raw in text_dates(" ".join(" ".join(b["text"]).split()))}
+        if len(dates) != 1:
+            continue
+        (iso, (raw, how)), = dates.items()
+        urls = {h.split("#")[0] for h, _ in links}
+        paths = {u: urlsplit(u).path.rstrip("/") for u in urls}
+        urls = {u for u in urls if not any(paths[v].startswith(paths[u] + "/") for v in urls)}   # not its section
+        if len(urls) != 1:
+            continue                                  # a container of several items: its one date fits only one
+        (href,) = urls
+        links = [(h, t) for h, t in links if h.split("#")[0] == href]
+        heads = list(dict.fromkeys(t for t, h in b["heads"] if good_title(t) and not text_dates(t)))
+        if len(heads) > 1:
+            heads = list(dict.fromkeys(t for t, h in b["heads"] if good_title(t) and not text_dates(t) and h and
+                                       h.split("#")[0] == href))
+            if len(heads) != 1:
+                continue
+        title = heads[0] if heads else None
+        if title is None:
+            cand = []
+            for h, t in links:
+                t = " ".join(SHORT_DATE.sub(" ", t).split())
+                for _, d in text_dates(t):
+                    t = " ".join(t.replace(d, " ").split())
+                if good_title(t):
+                    cand.append((t, h))
+            if not cand:
+                continue
+            title = max(cand, key=lambda x: len(x[0]))[0]
+        if home and how != "time element" and not NEWS_PATH.search(urlsplit(href).path):
+            continue
+        if href in seen or not useful_item(title, iso):
+            continue
+        seen.add(href)
+        items.append((iso, title, href, raw, how))
+    items.sort(key=lambda x: x[0], reverse=True)
+    for iso, title, href, raw, how in items[:limit]:
+        env.claim("hiring_activity", "dated_activity", {"date": iso, "title": title[:200], "url": href,
+                                                        "source": "company website (news listing)"},
+                  [env.cite(snap, title[:200], "news listing item; date from %s «%s»" % (how, raw[:40]))],
+                  effective_date=iso)
+    return min(len(items), limit)
