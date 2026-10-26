@@ -20,8 +20,9 @@ from . import __version__
 
 USER_AGENT = "BrierwiseSignalpost/%s (company research agent; contact brierwise@proton.me)" % __version__
 RETRY_STATUS = {429, 500, 502, 503, 504}
-# Seconds between two requests to the same host. Official APIs tolerate more; company sites get one request a second.
-SPACING = {"data.brreg.no": 0.05, "pam-stilling-feed.nav.no": 0.2}
+# Seconds between two requests to the same host. Official APIs tolerate more (Nav's feed is built for mirroring every
+# active ad); company sites get one request a second.
+SPACING = {"data.brreg.no": 0.05, "pam-stilling-feed.nav.no": 0.02}
 DEFAULT_SPACING = 1.0
 
 

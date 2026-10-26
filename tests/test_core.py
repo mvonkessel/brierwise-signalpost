@@ -106,6 +106,48 @@ class Core(unittest.TestCase):
         group = "Selskaper: Bisto AS org.nr 923 609 016. Bisto Entreprenør AS org.nr 920 209 270."
         self.assertEqual(scan_page(group, orgnr_patterns("920209270"), keys)[0], "orgnr_shared")
 
+    def test_nav_ads_by_workplace_number(self):
+        import json
+        from brierwise_signalpost.http import Response
+        from brierwise_signalpost.jobs import NavIndex, jobs
+
+        def ad(uuid, orgnr, published):
+            body = {"uuid": uuid, "status": "ACTIVE", "ad_content": {
+                "uuid": uuid, "title": "Lærling", "published": published + "T08:00:00",
+                "employer": {"name": "Kiwi Sentrum", "orgnr": orgnr, "homepage": "https://kiwi.no"},
+                "workLocations": [{"city": "SKIEN", "municipal": "SKIEN"}]}}
+            url = "https://pam-stilling-feed.nav.no/api/v1/feedentry/" + uuid
+            return Response(url, url, 200, {}, json.dumps(body).encode(), "2026-10-26T06:00:00Z")
+
+        index = NavIndex(None)
+        index.status, index.read, index.pages = "loaded", 3, 1
+        index.by_orgnr = {"974185411": [ad("u1", "974185411", "2026-10-01"), ad("u2", "974185411", "2026-10-20")],
+                          "999999999": [ad("u3", "999999999", "2026-10-21")]}
+        index._ready.set()
+        env = Envelope("923609016", {})
+        got = jobs(None, env, index, {"navn": "NG KIWI AS"}, [{"organisation_number": "974185411"}])
+        self.assertEqual(got["jobs"], 2)
+        posts = [c for c in env.claims if c["field"] == "job_posting"]
+        self.assertEqual([c["value"]["published"] for c in posts], ["2026-10-20", "2026-10-01"])
+        self.assertEqual(posts[0]["value"]["nav_ad_url"], "https://arbeidsplassen.nav.no/stillinger/stilling/u2")
+        empty = Envelope("920209270", {})
+        jobs(None, empty, index, {"navn": "BISTO AS"}, [])
+        self.assertEqual([c["availability"] for c in empty.claims], ["not_available"])
+        index.status = "partial"                       # absence is not claimed from a partly read feed
+        part = Envelope("920209270", {})
+        jobs(None, part, index, {"navn": "BISTO AS"}, [])
+        self.assertEqual([c["availability"] for c in part.claims], ["failed"])
+
+    def test_clip(self):
+        from brierwise_signalpost.synthesis import clip
+        self.assertEqual(clip("Kort  tekst.\n"), "Kort tekst.")
+        long = "Vi leverer trelast. " * 20
+        self.assertTrue(clip(long).endswith("trelast."))
+        self.assertLessEqual(len(clip(long)), 240)
+        words = "ord " * 100
+        self.assertTrue(clip(words).endswith(" …"))
+        self.assertNotIn("or …", clip(words))
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,7 @@ def main(argv=None) -> int:
     r.add_argument("--expected-count", type=int)
     r.add_argument("--site", help="also build the static profile site into this folder")
     r.add_argument("--previous", help="envelopes of the previous run (JSONL): changes and history are derived from it")
-    r.add_argument("--nav-days", type=int, default=45, help="Nav job feed window in days (0 switches it off)")
+    r.add_argument("--nav-days", type=int, default=200, help="Nav job feed window in days (0 switches it off)")
     s = sub.add_parser("site", help="build the static profile site from envelopes")
     s.add_argument("--envelopes", required=True)
     s.add_argument("--output", required=True)

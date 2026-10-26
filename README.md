@@ -16,7 +16,7 @@ PYTHONPATH=src python -m brierwise_signalpost run \
   --output out/envelopes.jsonl \
   --report out/run-report.json \
   --site out/site \
-  [--previous previous/envelopes.jsonl] [--run-id ID] [--workers 12] [--expected-count N] [--nav-days 45]
+  [--previous previous/envelopes.jsonl] [--run-id ID] [--workers 12] [--expected-count N] [--nav-days 200]
 ```
 
 The batch file may be JSON Lines (`{"organisation_number": "923609016"}` per line), a JSON list or
@@ -44,13 +44,14 @@ Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 | Legal identity, roles, workplaces | Brønnøysund Enhetsregisteret API | NLOD 2.0 | anchor |
 | Dated register events, monthly employee counts | Enhetsregisteret update stream (`oppdateringer/enheter` with JSON patches, last 13 months) | NLOD 2.0 | anchor; contact fields in the patches are ignored |
 | Annual accounts | Brønnøysund Regnskapsregisteret API | NLOD 2.0 | anchor |
-| Job ads | Nav job vacancy feed (pam-stilling-feed, public token fetched at run time) | Nav API terms: free use and republication, inactive ads removed | employer organisation number equals the company or one of its registered subunits |
+| Job ads | Nav job vacancy feed (pam-stilling-feed, public token fetched at run time): every ad active in the changes of the last 200 days is read in full once per run, in a background thread | Nav API terms: free use and republication, inactive ads removed | employer organisation number equals the company or one of its registered subunits (matched by number only, never by name) |
 | Website, own profiles, careers, dated items | the company's own website (pages, JSON-LD, RSS/Atom, WordPress posts API), robots.txt respected | company-owned | see "Identity gates" below; otherwise unpublished, a failing register entry is `ambiguous` |
 
 ### Identity gates for a website
 
 Candidates, in this order: the website in the company's register entry; employer homepages in the company's own Nav
-ads; the domain of the e-mail address in the company's register entry (domain only, mail and internet providers
+ads (when the Nav index is ready before the company's website step, which in large batches holds for most companies);
+the domain of the e-mail address in the company's register entry (domain only, mail and internet providers
 skipped, the address itself is never stored or shown); websites registered for its workplaces (up to three); domains
 built from the legal name (whole name, with «aa»/«oe» and as an internationalised domain; shortened name or first
 word); and, only with an evaluator key, web-search results. A candidate is published only with one of these proofs,
@@ -81,8 +82,10 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
   search requests and costs nothing.
 - No language model is used; synthesis is deterministic and cites claims.
 - Outbound URL policy: http and https only, ports 80 and 443, no credentials in URLs, every host (and every redirect
-  target) must resolve to public addresses; per-host spacing (one request per second for company sites), timeouts,
-  a 3 MB size limit and a time budget per company.
+  target) must resolve to public addresses; per-host spacing (one request per second for company sites, 20 per second
+  for the register, at most 50 per second and 12 at a time for Nav's feed), timeouts, a 3 MB size limit, a time
+  budget per company and 15 minutes for the Nav index (after that it is marked partial and absence of ads is not
+  claimed).
 - Secrets: none. The Nav public token is fetched at run time and never written to disk.
 - Third-party cost: 0 USD per run without a search key.
 
@@ -111,6 +114,14 @@ Scale test, 1,000 random companies (seed 20261028), same command: 1,000 of 1,000
 (per company p50 10.4 s, p95 23.5 s, maximum 49 s), 10,084 requests. Verified websites 131, companies with own
 profiles 67, dated register events 998, monthly employee series 141, careers pages 23, active Nav ads 2; the only
 errors were the unavailable accounts service.
+
+Nav ads by organisation number (v0.3.0). In a random sample of 400 active Nav ads (26 October 2026), 199 belonged to
+companies of the universe, every one of them through a registered workplace (the subunit number), and only 105 showed a
+display name that matches the legal or workplace name. v0.3.0 therefore reads every active ad once per run (406 feed
+pages, 9,283 active ads, 9,121 of them with an employer number; about 7 minutes in a background thread, while the other
+layers work) and matches by number only. In the 1,000-company scale sample, 4 companies have active ads, of which
+v0.2.0 found 2; in sample 1, 2 instead of 1 (a kindergarten whose ads use a shorter name). The 100-company smoke test
+of v0.3.0 took 421 s, nearly all of it the Nav index; its websites (13) and all other sections were unchanged.
 
 Known gaps: Regnskapsregisteret answered HTTP 503 for every request during the local runs (25–26 October 2026), so
 the accounts section is `failed` there and the run report shows it; sites whose TLS certificate chain cannot be

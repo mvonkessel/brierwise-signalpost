@@ -78,12 +78,24 @@ def load_batch(path: str) -> tuple[list[str], int]:
     return out, dup
 
 
-def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = None) -> dict:
+class Pending:
+    """A company whose hiring step waits for the Nav index. The worker goes on with the next company; `finish()`
+    completes this one at the end of the queue, when the index has long been read."""
+
+    def __init__(self, env: Envelope, cc: CountingClient, status: str, seconds: float, entity: dict, subunits: list):
+        self.env, self.cc, self.status, self.seconds = env, cc, status, seconds
+        self.entity, self.subunits = entity, subunits
+
+
+def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = None, defer: bool = False):
+    """One company: official layer, Nav ads, website. Returns the finished envelope, or a `Pending` when `defer` is set
+    and the Nav index is still loading (the website search then runs before the hiring step)."""
     t0 = time.monotonic()
     meta = {"run_id": run_id, "agent": AGENT_NAME, "agent_version": __version__, "started_at": now_iso()}
     env = Envelope(orgnr, meta)
     cc = CountingClient(client)
     status = "completed"
+    later = None
     try:
         if not valid_orgnr(orgnr):
             for sec in SECTIONS:
@@ -92,7 +104,10 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
         else:
             off = official(cc, env)
             if off["entity"] is not None:
-                hired = jobs(cc, env, nav, off["entity"], off["subunits"]) if nav else {"homepages": []}
+                if nav is not None and defer and not nav.ready():
+                    later, hired = (off["entity"], off["subunits"]), {"homepages": []}
+                else:
+                    hired = jobs(cc, env, nav, off["entity"], off["subunits"]) if nav else {"homepages": []}
                 extra = [(u, "nav_employer_homepage") for u, _ in hired["homepages"]]
                 found = find_website(cc, env, off["entity"], extra=extra, subunits=off["subunits"])
                 if found.get("status") == "available":
@@ -100,6 +115,24 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
     except Exception as exc:                       # one broken company must not break the batch
         status = "failed"
         env.error("agent", "%s: %s" % (type(exc).__name__, exc))
+    if later is not None:
+        return Pending(env, cc, status, time.monotonic() - t0, *later)
+    return close(env, cc, status, time.monotonic() - t0)
+
+
+def finish(p: Pending, nav: NavIndex) -> dict:
+    nav.wait()
+    t0 = time.monotonic()                          # waiting for the index is not this company's runtime
+    status = p.status
+    try:
+        jobs(p.cc, p.env, nav, p.entity, p.subunits)
+    except Exception as exc:
+        status = "failed"
+        p.env.error("agent", "%s: %s" % (type(exc).__name__, exc))
+    return close(p.env, p.cc, status, p.seconds + time.monotonic() - t0)
+
+
+def close(env: Envelope, cc: CountingClient, status: str, seconds: float) -> dict:
     env.run["completed_at"] = now_iso()
     env.run["terminal_status"] = status
     out = env.to_dict()
@@ -107,13 +140,20 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
         out["synthesis"] = synthesize(env)
     except Exception as exc:
         out["synthesis"] = {"sentences": [], "error": "%s: %s" % (type(exc).__name__, exc)}
-    out["operations"] = {"requests": cc.requests, "runtime_ms": int((time.monotonic() - t0) * 1000),
+    out["operations"] = {"requests": cc.requests, "runtime_ms": int(seconds * 1000),
                          "third_party_cost_usd": round(getattr(env, "cost_usd", 0.0), 4)}
     return out
 
 
+def failed_envelope(o: str, run_id: str, exc: Exception) -> dict:
+    return {"organisation_number": o, "run": {"run_id": run_id, "terminal_status": "failed", "completed_at": now_iso()},
+            "sections": {s: "failed" for s in SECTIONS}, "claims": [], "evidence": [], "source_snapshots": [],
+            "changes": [], "errors": [{"stage": "runner", "message": str(exc)}],
+            "operations": {"requests": 0, "runtime_ms": 0, "third_party_cost_usd": 0}}
+
+
 def run_batch(organisations: str, output: str, report: str, run_id: str, workers: int = 8,
-              expected_count: int | None = None, checkpoint: str | None = None, nav_days: int = 45,
+              expected_count: int | None = None, checkpoint: str | None = None, nav_days: int = 200,
               previous: str | None = None) -> dict:
     orgs, duplicates = load_batch(organisations)
     prev = load_previous(previous)
@@ -136,18 +176,12 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
                     done[env["organisation_number"]] = env
     lock = threading.Lock()
     todo = [o for o in orgs if o not in done]
+    if nav is not None and todo:
+        nav.start()                                # reads every active Nav ad while the other layers work
+    deferred = 0
     with open(checkpoint, "a", encoding="utf-8") as ck, ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
-        futures = {pool.submit(research, client, o, run_id, nav): o for o in todo}
-        for fut in as_completed(futures):
-            o = futures[fut]
-            try:
-                env = fut.result()
-            except Exception as exc:              # research() catches everything; this is the last net
-                env = {"organisation_number": o, "run": {"run_id": run_id, "terminal_status": "failed",
-                                                        "completed_at": now_iso()},
-                       "sections": {s: "failed" for s in SECTIONS}, "claims": [], "evidence": [],
-                       "source_snapshots": [], "changes": [], "errors": [{"stage": "runner", "message": str(exc)}],
-                       "operations": {"requests": 0, "runtime_ms": 0, "third_party_cost_usd": 0}}
+
+        def record(o: str, env: dict) -> None:
             p = prev.get(o)
             env["changes"], env["history"] = compare(p, env)
             if env.get("synthesis") and "error" not in env["synthesis"]:
@@ -159,6 +193,27 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
                 done[o] = env
                 ck.write(json.dumps(env, ensure_ascii=False) + "\n")
                 ck.flush()
+
+        futures = {pool.submit(research, client, o, run_id, nav, True): o for o in todo}
+        finishing = {}
+        for fut in as_completed(futures):
+            o = futures[fut]
+            try:
+                res = fut.result()
+            except Exception as exc:              # research() catches everything; this is the last net
+                res = failed_envelope(o, run_id, exc)
+            if isinstance(res, Pending):           # queued behind every company not yet started
+                deferred += 1
+                finishing[pool.submit(finish, res, nav)] = o
+                continue
+            record(o, res)
+        for fut in as_completed(finishing):
+            o = finishing[fut]
+            try:
+                res = fut.result()
+            except Exception as exc:
+                res = failed_envelope(o, run_id, exc)
+            record(o, res)
     os.makedirs(os.path.dirname(os.path.abspath(output)), exist_ok=True)
     tmp = output + ".tmp"
     with open(tmp, "w", encoding="utf-8") as fh:
@@ -182,8 +237,11 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
         "requests_total": sum(client.requests.values()),
         "runtime_ms_p50": int(statistics.median(rt)), "runtime_ms_p95": rt[min(len(rt) - 1, int(0.95 * len(rt)))],
         "third_party_cost_usd": round(sum(done[o]["operations"].get("third_party_cost_usd", 0) for o in orgs), 4),
-        "nav_feed": ({"status": nav.status, "pages": nav.pages, "ads": len({u for v in nav.by_name.values() for u in v}),
-                      "seconds": getattr(nav, "seconds", None)} if nav else None),
+        "nav_feed": ({"status": nav.status, "window_days": nav.days, "pages": nav.pages, "active_ads_listed": nav.listed,
+                      "active_ads_read": nav.read, "unreadable": nav.missing, "closed_meanwhile": nav.closed,
+                      "without_orgnr": nav.no_orgnr, "employer_orgnrs": len(nav.by_orgnr), "seconds": nav.seconds,
+                      "time_limit_s": nav.budget_s, "stopped_by_time_limit": nav.out_of_time,
+                      "hiring_steps_deferred": deferred} if nav else None),
     }
     with open(report, "w", encoding="utf-8") as fh:
         json.dump(rep, fh, ensure_ascii=False, indent=1)

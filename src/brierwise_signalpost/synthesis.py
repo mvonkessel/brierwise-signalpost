@@ -44,6 +44,18 @@ def nok(v) -> str:
     return s
 
 
+def clip(text: str, n: int = 240) -> str:
+    """Quoted text in one line, cut at a sentence end in the second half of the limit, else at a word, never mid-word."""
+    t = " ".join((text or "").split())
+    if len(t) <= n:
+        return t
+    cut = t[:n]
+    end = max(cut.rfind(". "), cut.rfind("! "), cut.rfind("? "))
+    if end >= n // 2:
+        return cut[: end + 1]
+    return cut.rsplit(" ", 1)[0].rstrip(" ,;:-") + " …"
+
+
 def synthesize(env) -> dict:
     by = defaultdict(list)
     for c in env.claims:
@@ -80,12 +92,11 @@ def synthesize(env) -> dict:
         say("status", STATUS_TEXT[status["value"]], [status])
     purpose, desc = first("registered_purpose"), first("website_description")
     if purpose:
-        p = purpose["value"]
-        say("purpose", "Registered purpose: «%s»." % (p if len(p) <= 240 else p[:237].rsplit(" ", 1)[0] + " …"),
-            [purpose])
+        p = clip(purpose["value"])
+        say("purpose", "Registered purpose: «%s»%s" % (p, "" if p[-1:] in ".!?…" else "."), [purpose])
     if desc:
         say("self_description", "Its own website describes it as: «%s» (company-owned text, not independent)." %
-            desc["value"][:240], [desc])
+            clip(desc["value"]), [desc])
     # numbers
     period = first("accounts_period")
     if period:
@@ -163,11 +174,15 @@ def synthesize(env) -> dict:
         if w:
             unknown.append(("official website", w[0]["availability"], w))
     # hiring and activity
-    jobs, careers = av("job_posting"), first("careers_page")
+    jobs, careers, total = av("job_posting"), first("careers_page"), first("job_postings_total")
     if jobs:
         latest = max((c["value"].get("published") or "") for c in jobs)
-        say("hiring", "%d active job ad%s on Nav's official job feed, latest published %s." % (
-            len(jobs), "s" if len(jobs) > 1 else "", latest or "unknown"), jobs)
+        n = total["value"] if total else len(jobs)
+        places = sorted({l.split(",")[0] for c in jobs for l in c["value"].get("locations") or []})
+        say("hiring", "%d active job ad%s on Nav's official job feed%s, latest published %s%s." % (
+            n, "s" if n > 1 else "", " (%d most recent listed)" % len(jobs) if total else "", latest or "unknown",
+            (", in " + ", ".join(p.title() for p in places[:4]) + (" and more" if len(places) > 4 else ""))
+            if places else ""), jobs + ([total] if total else []))
     elif careers:
         say("hiring", "Its website has a careers page (%s); no active ad was found on Nav's official feed." %
             careers["value"], [careers] + by.get("job_postings", []))
