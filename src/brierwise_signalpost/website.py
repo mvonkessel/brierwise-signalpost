@@ -551,6 +551,22 @@ def leader_on_page(text: str, leaders: list[tuple[str, str]]):
     return None
 
 
+def titled_entity(page: Page, text: str, legal_name: str) -> str | None:
+    """A name from the page title or og:site_name that the page also prints with a legal form, other than this company
+    («Wenaas Eftf» in the title and «Wenaas EFTF. AS» in the footer of wenaaskapital.no for WENAAS KAPITAL AS): the
+    site presents another legal entity, typically a sister or parent company at the same address."""
+    own = re.sub(r"[^a-z0-9]+", " ", fold(name_core(legal_name))).strip()
+    folded = re.sub(r"[^a-z0-9]+", " ", fold(text))
+    brands = re.split(r"\s[|\u2013\u2014:-]\s", page.title or "") + [page.meta.get("og:site_name") or ""]
+    for b in brands:
+        b = re.sub(r"[^a-z0-9]+", " ", fold(LEGAL_SUFFIX.sub("", b.strip()))).strip()
+        if len(b) < 3 or b == own:
+            continue
+        if re.search(r"(?<![a-z0-9])%s (as|asa|ans|da|sa|ba)(?![a-z0-9])" % re.escape(b), folded):
+            return b
+    return None
+
+
 def without_leaders(folded: str, leaders: list[tuple[str, str]]) -> str:
     """Folded text with the leaders' names blanked out: the company name must appear on its own, not only inside a
     person's name («STEINER BYGG AS» and its daily manager «Matthias Steiner Nilsen»)."""
@@ -712,7 +728,8 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         lead = None
         if kind != "orgnr" and leaders and named and same_domain and weak_ok and origin in LEADER_ORIGINS and \
                 not dummy and not any(other_orgnrs(t, env.orgnr) for _, t in texts) and \
-                all(t in without_leaders(named_text, leaders) for t in tokens[:3]):
+                all(t in without_leaders(named_text, leaders) for t in tokens[:3]) and \
+                not any(titled_entity(page, t, name) for _, t in texts):
             for s2, t2 in texts:
                 hit = leader_on_page(t2, leaders)
                 if hit:

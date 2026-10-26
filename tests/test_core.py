@@ -94,7 +94,14 @@ class Core(unittest.TestCase):
         self.assertIn("Kari Nordmann", hit[1])
         self.assertNotIn("22 33", hit[1])
         self.assertIsNone(leader_on_page("Per Hansen er styremedlem; Kari Nordmannsen svarer", leaders))
-        from brierwise_signalpost.website import handle_matches, without_leaders
+        from brierwise_signalpost.website import Page, handle_matches, titled_entity, without_leaders
+        pg = Page("https://www.wenaaskapital.no/")
+        pg.feed("<html><head><title>Wenaas Eftf</title></head><body>Vi bygger varige verdier</body></html>")
+        self.assertEqual(titled_entity(pg, "Om oss. Wenaas EFTF. AS | 6386 Måndalen", "WENAAS KAPITAL AS"),
+                         "wenaas eftf")
+        pg2 = Page("https://www.oclinholding.no/")
+        pg2.feed("<html><head><title>Oclin Holding AS</title></head><body>x</body></html>")
+        self.assertIsNone(titled_entity(pg2, "Oclin Holding AS, Oslo", "OCLIN HOLDING AS"))
         self.assertFalse(handle_matches("/kaihenningmelberg", {"kai", "marketing", "kaimarketing"}))
         self.assertTrue(handle_matches("/company/tgs_220114", {"tgs"}))
         self.assertTrue(handle_matches("/@tgs8281", {"tgs"}))
