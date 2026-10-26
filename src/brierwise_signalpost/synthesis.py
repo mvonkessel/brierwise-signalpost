@@ -258,6 +258,13 @@ def change_sentences(changes: list, prev: dict | None, claims: list) -> list:
         else:
             out.append({"topic": "changes", "text": "No material change since the previous run (%s)." % when,
                         "evidence_ids": []})
+        kept = [c for c in claims if c.get("carried_forward")]
+        if kept:
+            labels = sorted({FIELD_TEXT.get(c["field"], c["field"].replace("_", " ")) for c in kept})
+            out.append({"topic": "changes", "text": "Not re-checked in this run because the source failed, kept from the "
+                        "previous run (%s): %s." % (when, ", ".join(labels)),
+                        "evidence_ids": sorted({i for c in kept for i in c["evidence_ids"]},
+                                               key=lambda s: int(s.split("-")[1]))})
     else:
         out.append({"topic": "changes", "text": "First run for this company: there is no earlier snapshot yet, so the "
                     "next refresh will report what changed.", "evidence_ids": []})

@@ -15,7 +15,7 @@ from .http import Client, now_iso
 from .model import Envelope, SECTIONS, valid_orgnr
 from .jobs import NavIndex, jobs
 from .official import official
-from .refresh import compare, load_previous
+from .refresh import carry_forward, compare, load_previous
 from .synthesis import synthesize, with_changes
 from .website import extract_site, find_website
 
@@ -183,12 +183,15 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
 
         def record(o: str, env: dict) -> None:
             p = prev.get(o)
-            env["changes"], env["history"] = compare(p, env)
+            carried = []
+            env["changes"], env["history"] = compare(p, env, carried)
+            carry_forward(env, carried)
             if env.get("synthesis") and "error" not in env["synthesis"]:
                 env["synthesis"] = with_changes(env["synthesis"], env["changes"], p, env.get("claims") or [])
             env["refresh"] = {"previous_run_id": (p or {}).get("run", {}).get("run_id"),
                               "previous_completed_at": (p or {}).get("run", {}).get("completed_at"),
-                              "material_changes": len(env["changes"]), "first_run": p is None}
+                              "material_changes": len(env["changes"]), "first_run": p is None,
+                              "carried_forward": len(carried)}
             with lock:
                 done[o] = env
                 ck.write(json.dumps(env, ensure_ascii=False) + "\n")

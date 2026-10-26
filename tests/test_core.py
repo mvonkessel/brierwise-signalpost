@@ -138,6 +138,56 @@ class Core(unittest.TestCase):
         jobs(None, part, index, {"navn": "BISTO AS"}, [])
         self.assertEqual([c["availability"] for c in part.claims], ["failed"])
 
+    def test_refresh_keeps_facts_whose_source_failed(self):
+        from brierwise_signalpost.refresh import carry_forward
+        site = claim("official_website", "https://davvi.no/", section="website_profiles")
+        prof = claim("company_profile", {"platform": "facebook", "url": "https://www.facebook.com/davvi.no"},
+                     section="website_profiles")
+        a = env_with([claim("legal_name", "DAVVI AS"), site, prof])
+        b = env_with([claim("legal_name", "DAVVI AS"),
+                      claim("official_website", None, section="website_profiles", availability="failed")])
+        carried = []
+        changes, history = compare(a, b, carried)
+        self.assertEqual(changes, [])                  # an unreachable site is not a removed website
+        self.assertEqual(sorted(c["claim"]["field"] for c in carried), ["company_profile", "official_website"])
+        self.assertEqual(carry_forward(b, carried), 2)
+        kept = [c for c in b["claims"] if c.get("carried_forward")]
+        self.assertEqual(len(kept), 2)
+        self.assertTrue(all(i in {e["id"] for e in b["evidence"]} for c in kept for i in c["evidence_ids"]))
+        gone = env_with([claim("legal_name", "DAVVI AS"),
+                         claim("official_website", None, section="website_profiles", availability="not_available")])
+        changes, _ = compare(a, gone, [])
+        self.assertEqual(sorted(c["change"] for c in changes), ["removed", "removed"])
+
+    def test_refresh_ignores_new_output_fields_across_versions(self):
+        ad = {"title": "Tannlege", "published": "2026-09-29", "url": "https://arbeidsplassen.nav.no/stillinger/stilling/x"}
+        a = env_with([claim("job_posting", ad, section="hiring_activity")])
+        b = env_with([claim("job_posting", dict(ad, positions="1"), section="hiring_activity")])
+        a["run"]["agent_version"], b["run"]["agent_version"] = "0.2.0", "0.3.0"
+        self.assertEqual(compare(a, b)[0], [])
+        b["run"]["agent_version"] = "0.2.0"
+        self.assertEqual([c["change"] for c in compare(a, b)[0]], ["changed"])
+        b["claims"][0]["value"]["published"] = "2026-10-01"
+        b["run"]["agent_version"] = "0.3.0"
+        self.assertEqual([c["change"] for c in compare(a, b)[0]], ["changed"])
+
+    def test_fetch_state(self):
+        from brierwise_signalpost.http import Response
+        from brierwise_signalpost.website import fetch_state
+
+        def r(status, error=""):
+            return Response("https://x.no/", "https://x.no/", status, error=error)
+        self.assertEqual(fetch_state(r(0, "network: <urlopen error [Errno 11001] getaddrinfo failed>"), None),
+                         "not_available")
+        self.assertEqual(fetch_state(r(0, "refused: host is not public"), None), "not_available")
+        self.assertEqual(fetch_state(r(0, "network: <urlopen error _ssl.c:993: The handshake operation timed out>"),
+                                     None), "failed")
+        self.assertEqual(fetch_state(r(404), None), "not_available")
+        self.assertEqual(fetch_state(r(403), None), "blocked")
+        self.assertEqual(fetch_state(r(503), None), "failed")
+        self.assertEqual(fetch_state(None, "robots.txt disallows"), "blocked")
+        self.assertEqual(fetch_state(None, "time budget for this company used up"), "failed")
+
     def test_clip(self):
         from brierwise_signalpost.synthesis import clip
         self.assertEqual(clip("Kort  tekst.\n"), "Kort tekst.")

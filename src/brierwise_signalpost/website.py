@@ -15,7 +15,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .http import USER_AGENT
-from .model import Envelope
+from .model import Envelope, state_of_status
 
 LEGAL_SUFFIX = re.compile(r"\b(AS|ASA|ANS|DA|SA|BA|NUF|ENK|IKS|KF|SF|STI|FLI|BRL|ESEK|SAM|KS|PRE)\b\.?$", re.I)
 SOCIAL = {
@@ -439,6 +439,23 @@ def other_entity(page: Page, legal_name: str) -> str | None:
     return None
 
 
+DNS_FAIL = re.compile(r"getaddrinfo|name or service not known|nodename nor servname|no address associated|"
+                      r"name does not resolve|host is not public", re.I)
+
+
+def fetch_state(r, why) -> str:
+    """State of a candidate that gave no usable page. Our own limits and transient network errors (timeouts, TLS
+    handshakes, resets) are `failed`; a domain that does not resolve or a missing page is `not_available`; a refusal by
+    the site (robots.txt, 401/403/429/451) is `blocked`."""
+    if why:
+        return "blocked" if "robots" in why else "failed"
+    if r is None:
+        return "failed"
+    if r.status == 0:
+        return "not_available" if DNS_FAIL.search(r.error or "") else "failed"
+    return state_of_status(r.status)
+
+
 def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, extra: list | None = None,
                  subunits: list | None = None) -> dict:
     """Return {'status', 'site', 'proof', ...}; adds website claims. `seconds` bounds the whole website stage.
@@ -503,11 +520,10 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         r, snap, why = site.get(url)
         if r is None or not r.ok:
             if origin == "registry_listed":
-                state = "blocked" if why else ("not_available" if r is not None and r.status in (404, 410) or
-                                               (r is not None and r.status == 0) else "failed")
-                ev = [env.cite(snap, "HTTP %s %s" % (r.status, r.error))] if snap else []
-                deferred = (state, ev, "registry-listed website did not answer: %s" % (why or r.error or r.status),
-                            0.99)
+                state = fetch_state(r, why)
+                ev = [env.cite(snap, "HTTP %s %s" % (r.status, r.error))] if snap and r is not None else []
+                reason = why or (r.error or "HTTP %s" % r.status if r is not None else "page budget used up")
+                deferred = (state, ev, "registry-listed website did not answer: %s" % reason, 0.99)
             continue
         page = parse_page(r)
         if page is None:

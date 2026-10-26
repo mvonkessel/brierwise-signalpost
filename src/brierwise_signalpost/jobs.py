@@ -190,7 +190,8 @@ def jobs(client, env: Envelope, index: NavIndex, entity: dict, subunits: list[di
                  "locations": [l for l in locs if l], "employer_name": emp.get("name"),
                  "employer_organisation_number": emp.get("orgnr"), "positions": ad.get("positioncount"),
                  "engagement": ad.get("engagementtype"), "extent": ad.get("extent"), "url": ad.get("link"),
-                 "nav_ad_url": AD_PAGE + uuid if uuid else None, "source": "Nav job vacancy feed"}
+                 "nav_ad_url": AD_PAGE + uuid if uuid and AD_PAGE + uuid != ad.get("link") else None,
+                 "source": "Nav job vacancy feed"}
         env.claim("hiring_activity", "job_posting", {k: v for k, v in value.items() if v not in (None, "", [])},
                   [env.cite(snap, "%s; employer orgnr %s; published %s" % (ad.get("title"), emp.get("orgnr"),
                                                                           value["published"]), "nav ad")],
