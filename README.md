@@ -165,6 +165,11 @@ events whose date flipped between local time and UTC, and a website reported as 
 answer. Running v0.4.2 twice on the same 37 companies gave no change; a website that timed out in the second run was
 kept as `carried_forward`.
 
+Independent cross-check of the websites: in the same 1,000-company sample, 13 companies have a Wikidata item with their
+organisation number (P2333), 11 of them with an official website (P856). The agent verified 9 of these 11, all nine
+the same site as Wikidata; the other two are sites the register lists for a foundation, which the agent leaves
+`ambiguous` because the site does not name the foundation or forwards to another domain.
+
 The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
 October 2026; 20 parallel reads, at most 50 per second).
 
