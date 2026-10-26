@@ -107,6 +107,11 @@ universe are holding, property and housing entities without a website of their o
 explicitly. The register update stream gave dated register events for 100 of 100 companies of sample 2 (at least the
 filing of the 2025 accounts) and a monthly employee series for all 14 that report employees.
 
+Scale test, 1,000 random companies (seed 20261028), same command: 1,000 of 1,000 envelopes in 1,021 s with 12 workers
+(per company p50 10.4 s, p95 23.5 s, maximum 49 s), 10,084 requests. Verified websites 131, companies with own
+profiles 67, dated register events 998, monthly employee series 141, careers pages 23, active Nav ads 2; the only
+errors were the unavailable accounts service.
+
 Known gaps: Regnskapsregisteret answered HTTP 503 for every request during the local runs (25–26 October 2026), so
 the accounts section is `failed` there and the run report shows it; sites whose TLS certificate chain cannot be
 verified are not read; parked and directory domains are rejected.
