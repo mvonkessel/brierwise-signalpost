@@ -88,7 +88,8 @@ looked for on the home page and up to three contact or about pages of the same s
 6. the company name plus the full name of its registered daily manager or chair of the board (from the role register;
    also matched without a middle name) on the site; only for the register's site, an own Nav ad's homepage, the
    e-mail domain, a whole-name domain or a search candidate, never for shortened-name guesses or workplace sites, and
-   not when a checked page shows other companies' organisation numbers (0.85). This is the «legal name plus
+   not when a checked page shows other companies' organisation numbers or when the site's title names another legal
+   entity that the page prints with its legal form (a sister company's site at the same address) (0.85). This is the «legal name plus
    leadership» combination named in the challenge's playbook; the quoted span shows the name as the site prints it.
 
 Gates 2 to 6 never accept a placeholder page (parked, for sale, under construction, switched off), a site that calls
@@ -194,8 +195,9 @@ daily manager). Own social profiles: the sample lists 87 approved accounts at 43
 site timed out and with it its three profiles). On a new random sample of 100 (seed 20261099), v0.5.0 verified 16 websites instead of 14; both new
 ones pass gate 6 and were reviewed by hand (a film company whose site names it and its chair; a company whose register
 website carries its brand, names its daily manager and uses the company's own e-mail domain). On the 1,000-company
-scale sample (seed 20261028), v0.5.0 verified 145 websites instead of 136 in 462 s with 12 workers: 8 by gate 6, one
-that answered this time; each new site was reviewed by hand.
+scale sample (seed 20261028), v0.5.0 verified 144 websites instead of 136 in 462 s with 12 workers: 7 by gate 6 and one
+that answered this time. Each new site was reviewed by hand; the review removed an eighth, whose title and footer name a
+sister company at the same address, by the title rule of gate 6.
 
 The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
 October 2026; 20 parallel reads, at most 50 per second).
