@@ -70,10 +70,12 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
   register. Dates of birth, registered phone numbers and e-mail addresses are not read into claims. Contact persons
   in job ads are not used.
 - Social profiles are published only when the verified company site links them (JSON-LD `sameAs`, or an outbound link
-  whose account name resembles the company or its domain). No platform is scraped.
+  whose account name resembles the company or its domain), or when the company gives the profile as its website in
+  the register. No platform is scraped.
 - Web search is optional: only when the evaluator supplies `BRAVE_SEARCH_API_KEY`, one query per company without a
-  registered website (`"<name>" <town>`) proposes candidate domains; results are never evidence, a candidate is
-  published only when the site itself shows the organisation number in a register context and names the company.
+  registered website (`"<name>" <town>`) proposes candidate domains; results are never evidence, a candidate passes
+  the same identity gates as any other (organisation number, or name plus registered street address on its own
+  domain).
   Declared cost estimate: 0.005 USD per query, reported per envelope and per run. Without the key the agent makes no
   search requests and costs nothing.
 - No language model is used; synthesis is deterministic and cites claims.
@@ -82,6 +84,30 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
   a 3 MB size limit and a time budget per company.
 - Secrets: none. The Nav public token is fetched at run time and never written to disk.
 - Third-party cost: 0 USD per run without a search key.
+
+## Evaluation (local, 26 October 2026)
+
+Two random samples of 100 companies each from the public universe (seeds 20261026 and 20261127), run with the
+command above:
+
+| | sample 1, v0.1.0 | sample 1, v0.2.0 | sample 2, v0.2.0 |
+|---|---|---|---|
+| envelopes | 100/100 | 100/100 | 100/100 |
+| verified official websites | 8 | 13 | 10 |
+| companies with own profiles / dated activity | 4 / 2 | 7 / 5 | 5 / 2 |
+| wall time (workers) | 175 s (6) | 211 s (6) | 127 s (12) |
+
+Every published website and its proof span was reviewed by hand. Two sites that passed a weaker gate (counted 14 and
+11 before the review) were withdrawn by tightening the gates: a site the register listed for a transport company that presents itself as another legal
+entity (which lists the same site), and a law firm's site listed by a lawyer's sole proprietorship. The remaining 23
+show the organisation number (12), the company name with the registered street address (9) or are declared by the
+company and name it on the home page (2). A rerun with `--previous` produced no false changes. Most companies in the
+universe are holding, property and housing entities without a website of their own; for them the envelope says so
+explicitly.
+
+Known gaps: Regnskapsregisteret answered HTTP 503 for every request during the local runs (25–26 October 2026), so
+the accounts section is `failed` there and the run report shows it; sites whose TLS certificate chain cannot be
+verified are not read; parked and directory domains are rejected.
 
 ## Licence
 
