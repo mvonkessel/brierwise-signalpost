@@ -70,8 +70,9 @@ Candidates, in this order: the website in the company's register entry; employer
 ads (when the Nav index is ready before the company's website step, which in large batches holds for most companies);
 the domain of the e-mail address in the company's register entry (domain only, mail and internet providers
 skipped, the address itself is never stored or shown); websites registered for its workplaces (up to three); domains
-built from the legal name (whole name, with «aa»/«oe» and as an internationalised domain; shortened name or first
-word); and, only with an evaluator key, web-search results. A candidate is published only with one of these proofs,
+built from the legal name (whole name, with «aa»/«oe», as an internationalised domain, with initials joined
+(«P.E. GAARUD AS» on pe-gaarud.no) and without a leading word for the kind of body («SAMEIET ST OLAV» on st-olav.no);
+shortened name or first word); and, only with an evaluator key, web-search results. A candidate is published only with one of these proofs,
 looked for on the home page and up to three contact or about pages of the same site:
 
 1. the organisation number in a register context («org.nr», «MVA», «foretaksregisteret» ...), plus the company name
@@ -83,9 +84,14 @@ looked for on the home page and up to three contact or about pages of the same s
 4. a site the company listed in the register whose domain (or the domain it forwards to) spells the whole company name
    without legal form, such as «CSB INVEST AS» on csbinvest.net (0.8);
 5. the domain of the company's registered e-mail address, when the site stays on it and names the company on its home
-   page (0.8).
+   page (0.8);
+6. the company name plus the full name of its registered daily manager or chair of the board (from the role register;
+   also matched without a middle name) on the site; only for the register's site, an own Nav ad's homepage, the
+   e-mail domain, a whole-name domain or a search candidate, never for shortened-name guesses or workplace sites, and
+   not when a checked page shows other companies' organisation numbers (0.85). This is the «legal name plus
+   leadership» combination named in the challenge's playbook; the quoted span shows the name as the site prints it.
 
-Gates 2 to 5 never accept a placeholder page (parked, for sale, under construction, switched off), a site that calls
+Gates 2 to 6 never accept a placeholder page (parked, for sale, under construction, switched off), a site that calls
 itself by another legal entity's name, or a sole proprietorship (which needs its organisation number on the site).
 Parent, group, manager and brand sites that fail these gates stay unpublished; housing co-ownerships, for example,
 often list their manager's site in the register, which is reported as `ambiguous` with the reason. A platform page (Facebook, Instagram, LinkedIn
@@ -96,8 +102,9 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
   register. Dates of birth, registered phone numbers and e-mail addresses are not read into claims. Contact persons
   in job ads are not used.
 - Social profiles are published only when the verified company site links them (JSON-LD `sameAs`, or an outbound link
-  whose account name resembles the company or its domain), or when the company gives the profile as its website in
-  the register. No platform is scraped.
+  on the home page or its first contact or about page whose account name resembles the company or its domain), at
+  most two per platform, LinkedIn pages in their canonical form `/company/<name>`; or when the company gives the
+  profile as its website in the register. No platform is scraped.
 - Web search is optional: only when the evaluator supplies `BRAVE_SEARCH_API_KEY`, one query per company without a
   registered website (`"<name>" <town>`) proposes candidate domains; results are never evidence, a candidate passes
   the same identity gates as any other (organisation number, or name plus registered street address on its own
@@ -169,6 +176,21 @@ Independent cross-check of the websites: in the same 1,000-company sample, 13 co
 organisation number (P2333), 11 of them with an official website (P856). The agent verified 9 of these 11, all nine
 the same site as Wikidata; the other two are sites the register lists for a foundation, which the agent leaves
 `ambiguous` because the site does not name the foundation or forwards to another domain.
+
+Comparison with Builderr's public 100-company product sample (builderr.ai/signalpost, read only, 26 October 2026).
+The sample leans towards larger companies with websites: 67 of its 100 companies list a website in the 2025 snapshot,
+against 10.9 % of the universe. Its profiles give a website for 97 companies. v0.4.3 verified 71 of them (70 the
+same domain, one the same company's .no site instead of .com) and none that the sample lacks. Of the 26 others, 6 stay
+`ambiguous` (manager, chain or franchise sites, and one group site that now shows non-browser clients only a
+verification page), 4 could not be read (two TLS errors, two HTTP 403) and 16 have no website in the register today
+(two had one in August, when the sample was made). For these the sample relies on its own discovery and on the legal
+name appearing on the page, and marks several as needing review or uncertain; this agent does not treat the name
+alone as proof (one of these sites shows another company's organisation number, another is a group's site). v0.5.0 adds name variants (joined initials, names without «Sameiet» or «Stiftelsen») and gate
+6: 74 websites, the 3 new ones reviewed by hand (two show the organisation number, one names the company and its
+daily manager). Own social profiles: the sample lists 87 approved accounts at 43 companies, v0.5.0 89 at 39 companies,
+75 of them the same. On a new random sample of 100 (seed 20261099), v0.5.0 verified 16 websites instead of 14; both new
+ones pass gate 6 and were reviewed by hand (a film company whose site names it and its chair; a company whose register
+website carries its brand, names its daily manager and uses the company's own e-mail domain).
 
 The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
 October 2026; 20 parallel reads, at most 50 per second).

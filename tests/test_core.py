@@ -71,6 +71,36 @@ class Core(unittest.TestCase):
                          "https://www.facebook.com/profile.php?id=123")
         self.assertEqual(profile_url("https://www.instagram.com/ellashage/?hl=nb"), "https://www.instagram.com/ellashage")
 
+    def test_name_variants_and_leaders(self):
+        from brierwise_signalpost.model import Envelope
+        from brierwise_signalpost.website import leader_on_page, leaders_of, profile_url
+        self.assertIn(("pe-gaarud.no", "full"), guess_domains("P.E. GAARUD AS"))
+        self.assertIn(("st-olav.no", "full"), guess_domains("SAMEIET ST OLAV"))
+        self.assertIn(("hammaren.no", "full"), guess_domains("STIFTELSEN HAMMAREN"))
+        self.assertNotIn(("sameiet.no", "short"), guess_domains("SAMEIET ST OLAV"))
+        self.assertNotIn(("stiftelsen.no", "short"), guess_domains("STIFTELSEN HAMMAREN"))
+        self.assertEqual(guess_domains("MJØRUD AS")[0], ("mjorud.no", "full"))
+        env = Envelope("923609016", {})
+        env.claim("leadership_workplaces", "role", {"role_code": "DAGL", "role": "Daglig leder", "kind": "person",
+                                                     "name": "Kari Anne Nordmann"}, [])
+        env.claim("leadership_workplaces", "role", {"role_code": "MEDL", "role": "Styremedlem", "kind": "person",
+                                                     "name": "Per Hansen"}, [])
+        env.claim("leadership_workplaces", "role", {"role_code": "LEDE", "role": "Styrets leder",
+                                                     "kind": "organisation", "name": "MOR AS"}, [])
+        leaders = leaders_of(env)
+        self.assertEqual(leaders, [("Kari Anne Nordmann", "DAGL")])
+        hit = leader_on_page("Kontakt oss: daglig leder Kari Nordmann, tlf 22 33 44 55", leaders)
+        self.assertEqual(hit[0], "DAGL")
+        self.assertIn("Kari Nordmann", hit[1])
+        self.assertNotIn("22 33", hit[1])
+        self.assertIsNone(leader_on_page("Per Hansen er styremedlem; Kari Nordmannsen svarer", leaders))
+        from brierwise_signalpost.website import without_leaders
+        rest = without_leaders("matthias steiner nilsen daglig leder, garasjeport1", [("Matthias Steiner Nilsen", "DAGL")])
+        self.assertNotIn("steiner", rest)
+        self.assertIn("garasjeport1", rest)
+        self.assertEqual(profile_url("https://www.linkedin.com/company/ragasco-as/mycompany/"),
+                         "https://www.linkedin.com/company/ragasco-as")
+
     def test_batch_formats(self):
         import json
         import os

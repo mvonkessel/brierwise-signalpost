@@ -61,6 +61,9 @@ def name_core(legal_name: str) -> str:
 # association when it shows the other words. Housing co-ownerships keep theirs; their register sites are mostly the
 # manager's.
 FORM_WORDS = {"stiftelsen", "stiftelse", "stiftinga", "stifting", "foreningen", "forening"}
+# Words for the kind of body that a domain usually leaves out («SAMEIET ST OLAV» on st-olav.no).
+BODY_WORDS = FORM_WORDS | {"sameiet", "sameie", "boligsameiet", "eierseksjonssameiet", "borettslaget", "borettslag",
+                           "andelslaget", "andelslag"}
 
 
 def name_tokens(legal_name: str) -> list[str]:
@@ -121,17 +124,18 @@ def guess_domains(legal_name: str) -> list[tuple[str, str]]:
         forms.append(fold(raw.replace("å", "aa").replace("ø", "oe")))
     shorts = []
     for f in forms:
-        words = [w for w in re.split(r"[^a-z0-9]+", f) if w]
-        if not words or sum(len(w) for w in words) < 4 or len(words) > 4:
-            continue
-        add("".join(words) + ".no", "full")
-        if len(words) > 1:
-            add("-".join(words) + ".no", "full")
-        core = [w for w in words if w not in GENERIC_WORDS]
-        if core and core != words and sum(len(w) for w in core) >= 4:
-            shorts.append("".join(core) + ".no")
-        if len(words) > 1 and len(words[0]) >= 4 and words[0] not in GENERIC_WORDS | COMMON_FIRST:
-            shorts.append(words[0] + ".no")
+        for words in name_variants(f):
+            if not words or sum(len(w) for w in words) < 4 or len(words) > 4:
+                continue
+            add("".join(words) + ".no", "full")
+            if len(words) > 1:
+                add("-".join(words) + ".no", "full")
+            core = [w for w in words if w not in GENERIC_WORDS]
+            if core and core != words and sum(len(w) for w in core) >= 4:
+                shorts.append("".join(core) + ".no")
+            if (len(words) > 1 and len(words[0]) >= 4 and
+                    words[0] not in GENERIC_WORDS | COMMON_FIRST | BODY_WORDS):
+                shorts.append(words[0] + ".no")
     if out and re.search("[æøå]", raw):
         words = [w for w in re.split(r"[^a-z0-9æøå]+", raw) if w]
         try:
@@ -142,7 +146,29 @@ def guess_domains(legal_name: str) -> list[tuple[str, str]]:
         add(out[0][0][:-3] + ".com", "full")
     for d in shorts:
         add(d, "short")
-    return out[:8]
+    return out[:10]
+
+
+def name_variants(folded: str) -> list[list[str]]:
+    """Word lists a domain may be built from: the name as written, with initials joined («P.E. GAARUD» → pe gaarud),
+    and without a leading word for the kind of body («SAMEIET ST OLAV» → st olav)."""
+    words = [w for w in re.split(r"[^a-z0-9]+", folded) if w]
+    merged, buf = [], ""
+    for w in words:
+        if len(w) == 1 and w.isalpha():
+            buf += w
+            continue
+        if buf:
+            merged.append(buf)
+            buf = ""
+        merged.append(w)
+    if buf:
+        merged.append(buf)
+    out = [words]
+    for v in (merged, words[1:] if len(words) > 1 and words[0] in BODY_WORDS else None):
+        if v and v not in out:
+            out.append(v)
+    return out
 
 
 def normalize_site(url: str) -> str | None:
@@ -445,6 +471,9 @@ def scan_page(text: str, pat: re.Pattern, keys: list) -> tuple:
 def profile_url(url: str) -> str:
     """Canonical profile address: without query and fragment, except Facebook's numeric «profile.php?id=…»."""
     p = urlsplit(url)
+    m = re.match(r"^/(company|school|showcase)/([^/?#]+)", p.path)
+    if m and (p.hostname or "").endswith("linkedin.com"):
+        return urlunsplit((p.scheme or "https", p.netloc, "/%s/%s" % (m.group(1), m.group(2)), "", ""))
     if p.path.rstrip("/").endswith("profile.php"):
         q = "&".join(x for x in p.query.split("&") if x.startswith("id="))
         return urlunsplit((p.scheme, p.netloc, p.path, q, ""))
@@ -473,6 +502,50 @@ DNS_FAIL = re.compile(r"getaddrinfo|name or service not known|nodename nor servn
                       r"name does not resolve|host is not public", re.I)
 
 
+LEADER_ROLES = {"DAGL": "daily manager", "LEDE": "chair of the board"}
+# Origins where a name and a registered leader on the site tie it to the company; a shortened-name guess or a workplace
+# site may belong to a sister company or a chain with the same people.
+LEADER_ORIGINS = {"registry_listed", "nav_employer_homepage", "email_domain", "name_full", "search_candidate",
+                  "previous_run"}
+
+
+def leaders_of(env: Envelope) -> list[tuple[str, str]]:
+    """(full name, role code) of the registered daily manager and chair, from this envelope's role claims."""
+    out = []
+    for c in env.claims:
+        v = c.get("value")
+        if c.get("field") == "role" and isinstance(v, dict) and v.get("kind") == "person" and \
+                v.get("role_code") in LEADER_ROLES and v.get("name"):
+            out.append((v["name"], v["role_code"]))
+    return out
+
+
+def leader_on_page(text: str, leaders: list[tuple[str, str]]):
+    """(role code, exact quote) of the first leader whose full name the page shows («Ola Nordmann», also without a
+    middle name), or None."""
+    folded, idx = fold_map(text)
+    for name, code in leaders:
+        parts = [p for p in re.split(r"[^a-z0-9]+", fold(name)) if p]
+        if len(parts) < 2 or min(len(parts[0]), len(parts[-1])) < 2:
+            continue
+        for seq in ([parts, [parts[0], parts[-1]]] if len(parts) > 2 else [parts]):
+            m = re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % r"[\s\-]+".join(map(re.escape, seq)), folded)
+            if m:
+                return code, quote(text, idx[m.start()], idx[m.end() - 1] + 1, 50, 30)
+    return None
+
+
+def without_leaders(folded: str, leaders: list[tuple[str, str]]) -> str:
+    """Folded text with the leaders' names blanked out: the company name must appear on its own, not only inside a
+    person's name («STEINER BYGG AS» and its daily manager «Matthias Steiner Nilsen»)."""
+    for name, _ in leaders:
+        parts = [p for p in re.split(r"[^a-z0-9]+", fold(name)) if p]
+        for seq in ([parts, [parts[0], parts[-1]]] if len(parts) > 2 else [parts]):
+            if len(seq) >= 2:
+                folded = re.sub(r"(?<![a-z0-9])%s(?![a-z0-9])" % r"[\s\-]+".join(map(re.escape, seq)), " ", folded)
+    return folded
+
+
 def fetch_state(r, why) -> str:
     """State of a candidate that gave no usable page. Our own limits and transient network errors (timeouts, TLS
     handshakes, resets) are `failed`; a domain that does not resolve or a missing page is `not_available`; a refusal by
@@ -497,7 +570,9 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
       company name unless the company itself declared the site;
     - the company name plus the registered street address with house number and postcode on the same domain (not for
       shortened-name guesses, where a group or a namesake may own the domain);
-    - a site the company declared itself that stays on its domain and names the company.
+    - a site the company declared itself that stays on its domain and names the company;
+    - the company name and the full name of its registered daily manager or chair of the board on the site (not for
+      shortened-name guesses or workplace sites, and not when a page shows other companies' organisation numbers).
     Anything else stays unpublished; a register entry that fails these tests is reported as «ambiguous»."""
     deadline = time.monotonic() + seconds
     name = entity.get("navn") or ""
@@ -546,6 +621,7 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
     if prev_url:
         add(prev_url, "previous_run")
     tokens = name_tokens(name)
+    leaders = leaders_of(env)
     deferred = None                                   # the register's own site when it failed the tests
     prev_failed = None                                # the previous run's site when it could not be read now
     for url, origin in candidates:
@@ -582,6 +658,7 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             continue                                   # a redirect to a directory, marketplace or social platform
         named_text = fold(page.title + " " + page.text[:20000])
         home_text = named_text
+        texts = [(snap, page.text)]
         kind, span = scan_page(page.text, pat, keys)
         proof_snap = snap if kind else None
         if kind != "orgnr":
@@ -602,6 +679,7 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
                 if p2 is None:
                     continue
                 named_text += " " + fold(p2.title + " " + p2.text[:20000])
+                texts.append((snap2, p2.text))
                 k2, s2 = scan_page(p2.text, pat, keys)
                 if k2 == "orgnr" or (k2 and not kind) or (k2 == "orgnr_shared" and kind == "address"):
                     kind, span, proof_snap = k2, s2, snap2
@@ -615,6 +693,15 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         # organisation number on the site ties a site to it.
         weak_ok = ((entity.get("organisasjonsform") or {}).get("kode") or "") not in ("ENK",) and not other
         dummy = kind != "orgnr" and placeholder(page)
+        lead = None
+        if kind != "orgnr" and leaders and named and same_domain and weak_ok and origin in LEADER_ORIGINS and \
+                not dummy and not any(other_orgnrs(t, env.orgnr) for _, t in texts) and \
+                all(t in without_leaders(named_text, leaders) for t in tokens[:3]):
+            for s2, t2 in texts:
+                hit = leader_on_page(t2, leaders)
+                if hit:
+                    lead = (hit[0], hit[1], s2)
+                    break
         if kind == "orgnr" and (declared or named):
             proof, conf = "organisation number shown on the site", 0.99
         elif dummy:
@@ -630,6 +717,9 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
                                               "; it forwards to %s, which spells the company name" % final_host), 0.8
         elif origin == "email_domain" and same_domain and named_home and weak_ok:
             proof, conf = "the site names the company on its home page", 0.8
+        elif lead:
+            proof, conf = "the site names the company and its registered %s" % LEADER_ROLES[lead[0]], 0.85
+            kind, span, proof_snap = "leader", lead[1], lead[2]
         else:
             proof = None
         if proof is None:
@@ -642,7 +732,8 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             continue                                   # no proof: never published
         ev = [env.cite(snap, (page.title or "")[:160], "homepage")]
         if proof_snap is not None and span:
-            ev.append(env.cite(proof_snap, span, "registered_address" if kind == "address" else "organisation_number"))
+            ev.append(env.cite(proof_snap, span, {"address": "registered_address", "leader": "registered_leader"}.get(
+                kind, "organisation_number")))
         if origin == "email_domain" and register_snap:
             ev.append(env.cite(register_snap, mail_domain, "epostadresse (domain only)"))
         if origin == "registry_listed" and register_snap:
@@ -690,24 +781,40 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
             and not looks_like_domain:
         env.claim("legal_identity", "public_brand", brand.strip()[:120], [env.cite(snap, brand.strip()[:120], how)],
                   confidence=0.9, note="name the verified company website uses for itself")
-    profiles = {}
+    profiles = {}                                     # canonical url -> (platform, link, how, snapshot)
+
+    def keep(plat, link, how, s):
+        u = profile_url(link)
+        if u.lower() not in {k.lower() for k in profiles} and sum(p == plat for p, *_ in profiles.values()) < 2:
+            profiles[u] = (plat, link, how, s)
     for it in items:
         same = it.get("sameAs")
         for s in (same if isinstance(same, list) else [same]):
             if isinstance(s, str):
                 for plat, rx in SOCIAL.items():
-                    if rx.match(s) and plat not in profiles:
-                        profiles[plat] = (s, "JSON-LD sameAs")
+                    if rx.match(s):
+                        keep(plat, s, "JSON-LD sameAs", snap)
     marks = set(name_tokens(env.legal_name or "")) | {fold(host.split(".")[0])}
+    pages = [(page, snap, "outbound link on the company site")]
     for link, text in page.links:
-        for plat, rx in SOCIAL.items():
-            if plat not in profiles and rx.match(link):
-                slug = fold(urlsplit(link).path)
-                if any(m and (m in slug or slug.strip("/@") in m) for m in marks if len(m) >= 3):
-                    profiles[plat] = (link, "outbound link on the company site")
-    for plat, (url, how) in sorted(profiles.items()):
-        env.claim(sec, "company_profile", {"platform": plat, "url": profile_url(url)},
-                  [env.cite(snap, url, "company_profile: " + how)], confidence=0.95,
+        lp = urlsplit(link)
+        if site_key(lp.hostname) == host and lp.path not in ("", "/") and PAGE_HINTS["contact"].search(lp.path + " " +
+                                                                                                         text):
+            rr, ss, why = site.get(urlunsplit((lp.scheme, lp.netloc, lp.path, lp.query, "")))
+            pg = parse_page(rr) if rr is not None and rr.ok else None
+            if pg is not None:
+                pages.append((pg, ss, "outbound link on a contact or about page of the company site"))
+            break
+    for pg, ss, how in pages:
+        for link, text in pg.links:
+            for plat, rx in SOCIAL.items():
+                if rx.match(link):
+                    slug = fold(urlsplit(profile_url(link)).path)
+                    if any(m and (m in slug or slug.strip("/@") in m) for m in marks if len(m) >= 3):
+                        keep(plat, link, how, ss)
+    for url, (plat, link, how, s) in sorted(profiles.items(), key=lambda x: (x[1][0], x[0])):
+        env.claim(sec, "company_profile", {"platform": plat, "url": url},
+                  [env.cite(s, link, "company_profile: " + how)], confidence=0.95,
                   note="linked from the verified company website (%s)" % how)
     mails = sorted({l[7:].split("?")[0].lower() for l, _ in page.links if l.lower().startswith("mailto:")})
     for m in [m for m in mails if GENERIC_MAIL.match(m)][:3]:
