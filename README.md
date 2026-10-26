@@ -24,7 +24,11 @@ The batch file may be JSON Lines (`{"organisation_number": "923609016"}` per lin
 one per line. The run writes exactly one terminal envelope per distinct input number, in input order, a
 machine-readable run report, and (with `--site`) a static profile site. A crashed run resumes from
 `<output>.partial` when started again with the same `--run-id`. With `--previous`, each envelope lists material
-changes since that run and keeps facts that disappeared, with their original evidence, under `history`.
+changes since that run and keeps facts that disappeared, with their original evidence, under `history`. A fact whose
+source failed in this run (the website timed out, the accounts service was down) is not reported as removed: its last
+supported value stays as a claim marked `carried_forward`, with its original evidence and retrieval time, next to the
+failed claim. Between two agent versions only the value fields both versions write are compared, so a new output
+field is not reported as a change of the company.
 
 Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
@@ -121,7 +125,11 @@ display name that matches the legal or workplace name. v0.3.0 therefore reads ev
 pages, 9,283 active ads, 9,121 of them with an employer number; about 7 minutes in a background thread, while the other
 layers work) and matches by number only. In the 1,000-company scale sample, 4 companies have active ads, of which
 v0.2.0 found 2; in sample 1, 2 instead of 1 (a kindergarten whose ads use a shorter name). The 100-company smoke test
-of v0.3.0 took 421 s, nearly all of it the Nav index; its websites (13) and all other sections were unchanged.
+of v0.3.0 took 421 s, nearly all of it the Nav index; its websites (13) and all other sections were unchanged. The
+1,000-company scale test with v0.3.0 (same seed, `--previous` the v0.2.0 run) gave 1,000 of 1,000 envelopes in 921 s
+with 12 workers (per company p50 10.0 s, p95 19.5 s; 434 hiring steps waited for the index and ran at the end),
+19,702 requests, job ads at 4 companies; one registered website timed out in the TLS handshake and was reported as
+removed, which is why a failed source now keeps the previous value instead.
 
 Known gaps: Regnskapsregisteret answered HTTP 503 for every request during the local runs (25–26 October 2026), so
 the accounts section is `failed` there and the run report shows it; sites whose TLS certificate chain cannot be
