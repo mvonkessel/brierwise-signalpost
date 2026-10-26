@@ -480,6 +480,22 @@ def profile_url(url: str) -> str:
     return url.split("?")[0].split("#")[0].rstrip("/")
 
 
+def handle_matches(slug: str, marks: set) -> bool:
+    """Does a profile path belong to the company? A name word or the site's domain label of four letters or more must
+    appear in it (or the account name in that word); a three-letter word only as the whole account name, optionally
+    with a legal form, country word or number («tgs», «tgs_220114»), never as the start of a person's name
+    («KaiHenningMelberg» for «KAI MARKETING AS»)."""
+    handle = re.sub(r"[-_.]", "", slug.strip("/@").split("/")[-1])
+    for m in marks:
+        if not m:
+            continue
+        if len(m) >= 4 and (m in slug or slug.strip("/@") in m):
+            return True
+        if len(m) == 3 and re.fullmatch(r"%s(as|asa|no|norge|norway|group|official)?\d*" % re.escape(m), handle):
+            return True
+    return False
+
+
 def self_names(page: Page) -> list[str]:
     """Names a site gives itself: og:site_name and JSON-LD Organization names."""
     names = [page.meta.get("og:site_name") or ""]
@@ -781,12 +797,16 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
             and not looks_like_domain:
         env.claim("legal_identity", "public_brand", brand.strip()[:120], [env.cite(snap, brand.strip()[:120], how)],
                   confidence=0.9, note="name the verified company website uses for itself")
-    profiles = {}                                     # canonical url -> (platform, link, how, snapshot)
+    profiles = {}                                     # account key -> (platform, url, link, how, snapshot)
 
     def keep(plat, link, how, s):
         u = profile_url(link)
-        if u.lower() not in {k.lower() for k in profiles} and sum(p == plat for p, *_ in profiles.values()) < 2:
-            profiles[u] = (plat, link, how, s)
+        if u.startswith("http://"):
+            u = "https://" + u[7:]
+        p = urlsplit(u)
+        key = "%s:%s?%s" % (plat, p.path.lower().rstrip("/"), p.query)   # same account whatever scheme, host or case
+        if key not in profiles and sum(v[0] == plat for v in profiles.values()) < 2:
+            profiles[key] = (plat, u, link, how, s)
     for it in items:
         same = it.get("sameAs")
         for s in (same if isinstance(same, list) else [same]):
@@ -809,10 +829,9 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
         for link, text in pg.links:
             for plat, rx in SOCIAL.items():
                 if rx.match(link):
-                    slug = fold(urlsplit(profile_url(link)).path)
-                    if any(m and (m in slug or slug.strip("/@") in m) for m in marks if len(m) >= 3):
+                    if handle_matches(fold(urlsplit(profile_url(link)).path), marks):
                         keep(plat, link, how, ss)
-    for url, (plat, link, how, s) in sorted(profiles.items(), key=lambda x: (x[1][0], x[0])):
+    for plat, url, link, how, s in sorted(profiles.values(), key=lambda v: (v[0], v[1])):
         env.claim(sec, "company_profile", {"platform": plat, "url": url},
                   [env.cite(s, link, "company_profile: " + how)], confidence=0.95,
                   note="linked from the verified company website (%s)" % how)

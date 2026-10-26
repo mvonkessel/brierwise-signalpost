@@ -102,8 +102,10 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
   register. Dates of birth, registered phone numbers and e-mail addresses are not read into claims. Contact persons
   in job ads are not used.
 - Social profiles are published only when the verified company site links them (JSON-LD `sameAs`, or an outbound link
-  on the home page or its first contact or about page whose account name resembles the company or its domain), at
-  most two per platform, LinkedIn pages in their canonical form `/company/<name>`; or when the company gives the
+  on the home page or its first contact or about page whose account name contains a word of the company name or the
+  site's domain label; a three-letter word counts only as the whole account name, so that «KaiHenningMelberg» is not
+  taken for «KAI MARKETING AS»), at most two accounts per platform, the same account only once whatever scheme, host
+  or case the link uses, LinkedIn pages in their canonical form `/company/<name>`; or when the company gives the
   profile as its website in the register. No platform is scraped.
 - Web search is optional: only when the evaluator supplies `BRAVE_SEARCH_API_KEY`, one query per company without a
   registered website (`"<name>" <town>`) proposes candidate domains; results are never evidence, a candidate passes
@@ -188,9 +190,12 @@ name appearing on the page, and marks several as needing review or uncertain; th
 alone as proof (one of these sites shows another company's organisation number, another is a group's site). v0.5.0 adds name variants (joined initials, names without «Sameiet» or «Stiftelsen») and gate
 6: 74 websites, the 3 new ones reviewed by hand (two show the organisation number, one names the company and its
 daily manager). Own social profiles: the sample lists 87 approved accounts at 43 companies, v0.5.0 89 at 39 companies,
-75 of them the same. On a new random sample of 100 (seed 20261099), v0.5.0 verified 16 websites instead of 14; both new
+75 of them the same (a second run with the final profile rules below gave the same, except that one registered
+site timed out and with it its three profiles). On a new random sample of 100 (seed 20261099), v0.5.0 verified 16 websites instead of 14; both new
 ones pass gate 6 and were reviewed by hand (a film company whose site names it and its chair; a company whose register
-website carries its brand, names its daily manager and uses the company's own e-mail domain).
+website carries its brand, names its daily manager and uses the company's own e-mail domain). On the 1,000-company
+scale sample (seed 20261028), v0.5.0 verified 145 websites instead of 136 in 462 s with 12 workers: 8 by gate 6, one
+that answered this time; each new site was reviewed by hand.
 
 The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
 October 2026; 20 parallel reads, at most 50 per second).

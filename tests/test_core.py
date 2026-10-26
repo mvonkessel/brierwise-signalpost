@@ -94,7 +94,11 @@ class Core(unittest.TestCase):
         self.assertIn("Kari Nordmann", hit[1])
         self.assertNotIn("22 33", hit[1])
         self.assertIsNone(leader_on_page("Ola Nordmann er styremedlem; Kari Nordmannsen svarer", leaders))
-        from brierwise_signalpost.website import without_leaders
+        from brierwise_signalpost.website import handle_matches, without_leaders
+        self.assertFalse(handle_matches("/olahenningberg", {"ola", "marketing", "olamarketing"}))
+        self.assertTrue(handle_matches("/company/tgs_220114", {"tgs"}))
+        self.assertTrue(handle_matches("/@tgs8281", {"tgs"}))
+        self.assertTrue(handle_matches("/brolykkeislandshester", {"brolykke"}))
         rest = without_leaders("ola nordmann berg daglig leder, garasjeport1", [("Ola Nordmann Berg", "DAGL")])
         self.assertNotIn("nordmann", rest)
         self.assertIn("garasjeport1", rest)
