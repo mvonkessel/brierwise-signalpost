@@ -71,12 +71,16 @@ def value_text(v) -> str:
                 " <span class=mut>%s</span>" % e(v.get("published") or v.get("date"))
         if "role" in v:
             return "%s: %s" % (e(v["role"]), e(v["name"]))
+        if "event" in v:
+            return "%s <span class=mut>%s</span>" % (e(v["event"]), e(v.get("date")))
         if set(v) <= {"code", "label"} and v.get("label"):
             return "%s (%s)" % (e(v["label"]), e(v.get("code")))
         if set(v) <= {"name", "number"} and v.get("name"):
             return "%s (%s)" % (e(str(v["name"]).title()), e(v.get("number")))
         return e(", ".join("%s: %s" % (k.replace("_", " "), x) for k, x in v.items() if x not in (None, "", [])))
     if isinstance(v, list):
+        if v and all(isinstance(x, dict) and "employees" in x for x in v):
+            return e("; ".join("%s: %s" % (x.get("date"), x.get("employees")) for x in v))
         return e("; ".join(("%s (%s)" % (x.get("label"), x.get("code")) if x.get("code") and x.get("label") else
                             x.get("label") or x.get("name") or str(x)) if isinstance(x, dict) else str(x) for x in v))
     if isinstance(v, str) and v.startswith("http"):

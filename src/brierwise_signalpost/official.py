@@ -270,9 +270,99 @@ def fetch_accounts(client, env: Envelope) -> list[dict]:
     return out
 
 
+# Register update stream: which changed field means which public event. Contact fields (e-mail, phone) are skipped.
+EVENTS = (
+    ("/navn", "legal name changed to {v}"),
+    ("/organisasjonsform", "legal form changed"),
+    ("/forretningsadresse", "business address changed"),
+    ("/postadresse", "postal address changed"),
+    ("/naeringskode1", "main industry classification changed"),
+    ("/vedtektsfestetFormaal", "registered purpose changed"),
+    ("/aktivitet", "registered activity changed"),
+    ("/sisteInnsendteAarsregnskap", "annual accounts for {v} filed"),
+    ("/kapital/belop", "share capital set to NOK {v}"),
+    ("/vedtektsdato", "articles of association changed"),
+    ("/hjemmeside", "website in the register changed"),
+    ("/konkurs", "bankruptcy flag set to {v}"),
+    ("/underAvvikling", "liquidation flag set to {v}"),
+    ("/underTvangsavviklingEllerTvangsopplosning", "forced-dissolution flag set to {v}"),
+    ("/registrertIMvaregisteret", "VAT registration set to {v}"),
+    ("/registrertIForetaksregisteret", "business register entry set to {v}"),
+    ("/overordnetEnhet", "parent unit changed"),
+)
+
+
+def _num(v) -> str:
+    try:
+        x = float(v)
+    except (TypeError, ValueError):
+        return str(v)
+    return "{:,.0f}".format(x).replace(",", " ") if x == int(x) else str(x)
+
+
+def fetch_updates(client, env: Envelope, months: int = 13, limit: int = 10) -> dict:
+    """Dated changes of the register entry over the last `months` months (Enhetsregisteret update stream with JSON
+    patches): public events (filed accounts, capital, address, name, status ...) and the monthly employee counts."""
+    from datetime import datetime, timedelta, timezone
+    since = (datetime.now(timezone.utc) - timedelta(days=31 * months)).strftime("%Y-%m-%dT00:00:00.000Z")
+    url = ("%s/enhetsregisteret/api/oppdateringer/enheter?dato=%s&organisasjonsnummer=%s&includeChanges=true&size=100"
+           % (BRREG, since, env.orgnr))
+    r = client.get(url, accept="application/json")
+    snap = env.snapshot(r, "official_registry", "brreg_oppdateringer_json")
+    if not r.ok:
+        state = state_of_status(r.status)
+        env.claim("hiring_activity", "register_events", None, [env.cite(snap, "HTTP %s" % r.status)], state)
+        if state != "not_available":
+            env.error("official.updates", r.error or "HTTP %s" % r.status, url)
+        return {"events": [], "employees": []}
+    try:
+        body = r.json()
+        rows = [(u, snap) for u in (body.get("_embedded") or {}).get("oppdaterteEnheter") or []]
+        pages = int((body.get("page") or {}).get("totalPages") or 1)
+        if pages > 1:                                  # oldest first: the newest updates sit on the last page
+            r2 = client.get(url + "&page=%d" % (pages - 1), accept="application/json")
+            if r2.ok:
+                snap2 = env.snapshot(r2, "official_registry", "brreg_oppdateringer_json")
+                rows += [(u, snap2) for u in (r2.json().get("_embedded") or {}).get("oppdaterteEnheter") or []]
+    except (ValueError, AttributeError, TypeError) as exc:
+        env.error("official.updates", "invalid JSON: %s" % exc, url)
+        return {"events": [], "employees": []}
+    events, staff = [], []
+    for u, s in rows:
+        date = (u.get("dato") or "")[:10]
+        patch = u.get("endringer") or []
+        seen = set()
+        for op in patch:
+            path, value = op.get("path") or "", op.get("value")
+            if path == "/antallAnsatte":
+                if isinstance(value, (int, float)) or (isinstance(value, str) and value.isdigit()):
+                    staff.append((date, int(value), s))
+                continue
+            for prefix, text in EVENTS:
+                if (path == prefix or path.startswith(prefix + "/")) and prefix not in seen:
+                    seen.add(prefix)
+                    v = _num(value) if prefix == "/kapital/belop" else value
+                    events.append((date, text.format(v=v if v not in (None, "") else "a new value"), path,
+                                   u.get("oppdateringsid"), s))
+    for date, text, path, uid, s in sorted(events, key=lambda x: (x[0], x[3] or 0), reverse=True)[:limit]:
+        env.claim("hiring_activity", "register_event", {"date": date, "event": text,
+                                                         "source": "Brønnøysund Register Centre, register update"},
+                  [env.cite(s, "oppdateringsid %s, %s: %s" % (uid, date, path), "oppdatering")],
+                  effective_date=date, note="dated change of the official register entry")
+    if staff:
+        staff.sort(key=lambda x: x[0])
+        series = [{"date": d, "employees": n} for d, n, _ in staff]
+        env.claim("legal_identity", "registered_employees_history", series,
+                  sorted({env.cite(s, "%s: antallAnsatte %s" % (d, n), "oppdatering antallAnsatte")
+                          for d, n, s in (staff[0], staff[-1])}, key=lambda i: int(i.split("-")[1])),
+                  effective_date=series[-1]["date"], note="monthly employee counts the register received from Nav's "
+                  "employer register over the last %d months" % months)
+    return {"events": events, "employees": staff}
+
+
 def official(client, env: Envelope) -> dict:
     entity = fetch_entity(client, env)
     if entity is None:
-        return {"entity": None, "roles": [], "subunits": [], "accounts": []}
+        return {"entity": None, "roles": [], "subunits": [], "accounts": [], "updates": {}}
     return {"entity": entity, "roles": fetch_roles(client, env), "subunits": fetch_subunits(client, env),
-            "accounts": fetch_accounts(client, env)}
+            "accounts": fetch_accounts(client, env), "updates": fetch_updates(client, env)}

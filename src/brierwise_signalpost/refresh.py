@@ -17,6 +17,7 @@ MATERIAL = {
     "company_profile": lambda v: (v.get("platform"), v.get("url")),
     "job_posting": lambda v: v.get("url") or (v.get("title"), v.get("published")),
     "dated_activity": lambda v: (v.get("date"), v.get("title")),
+    "register_event": lambda v: (v.get("date"), v.get("event")),
 }
 ACCOUNT_FIELDS = {"revenue", "operating_result", "net_result", "equity", "total_assets", "total_debt",
                   "profit_before_tax"}

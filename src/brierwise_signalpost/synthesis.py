@@ -134,9 +134,17 @@ def synthesize(env) -> dict:
                                                            (" in " + ", ".join(t.title() for t in towns[:6]) +
                                                             (" and more" if len(towns) > 6 else "")) if towns else ""),
             wp)
-    emp = first("registered_employees")
+    emp, hist = first("registered_employees"), first("registered_employees_history")
     if emp:
-        say("employees", "The register reports %s employees." % emp["value"], [emp])
+        text = "The register reports %s employees" % emp["value"]
+        series = (hist or {}).get("value") or []
+        if len(series) >= 2 and series[0]["employees"] != series[-1]["employees"]:
+            a, b = series[0], series[-1]
+            text += ", %s from %s on %s to %s on %s" % ("up" if b["employees"] > a["employees"] else "down",
+                                                       a["employees"], a["date"], b["employees"], b["date"])
+        elif len(series) >= 2:
+            text += ", unchanged since %s" % series[0]["date"]
+        say("employees", text + ".", [emp, hist])
     # online presence
     site, profs, brand = first("official_website"), av("company_profile"), first("public_brand")
     if site:
@@ -194,7 +202,7 @@ FIELD_TEXT = {"legal_name": "legal name", "organisation_form": "legal form", "re
               "registry_website": "website in the register", "official_website": "official website",
               "share_capital": "share capital", "registered_purpose": "registered purpose",
               "part_of_group": "group membership", "role": "role holder", "registered_workplace": "registered workplace",
-              "company_profile": "company-owned profile", "job_posting": "job ad", "dated_activity": "dated item",
+              "company_profile": "company-owned profile", "job_posting": "job ad", "dated_activity": "dated item", "register_event": "register event",
               "public_brand": "public brand", "revenue": "revenue", "operating_result": "operating result",
               "net_result": "net result", "equity": "equity", "total_assets": "total assets",
               "total_debt": "total debt", "profit_before_tax": "profit before tax"}
@@ -204,6 +212,8 @@ def _short(v) -> str:
     if isinstance(v, dict):
         if v.get("amount") is not None:
             return "NOK " + nok(v["amount"])
+        if v.get("event"):
+            return "%s %s" % (v.get("date") or "", v["event"])
         bits = [str(v[k]) for k in ("role", "name", "title", "platform", "url", "label", "address") if v.get(k)]
         return ", ".join(bits[:2]) or "a new value"
     if isinstance(v, list):
@@ -236,6 +246,13 @@ def change_sentences(changes: list, prev: dict | None, claims: list) -> list:
     else:
         out.append({"topic": "changes", "text": "First run for this company: there is no earlier snapshot yet, so the "
                     "next refresh will report what changed.", "evidence_ids": []})
+    events = sorted((c for c in claims if c["field"] == "register_event" and c["availability"] == "available"),
+                    key=lambda c: c["value"].get("date") or "", reverse=True)
+    if events:
+        out.append({"topic": "changes", "text": "Latest changes in the official register: %s." % "; ".join(
+            "%s %s" % (c["value"]["date"], c["value"]["event"]) for c in events[:3]),
+            "evidence_ids": sorted({i for c in events[:3] for i in c["evidence_ids"]},
+                                   key=lambda s: int(s.split("-")[1]))})
     former = next((c for c in claims if c["field"] == "former_names" and c["availability"] == "available"), None)
     if former and former["value"]:
         last = sorted(former["value"], key=lambda n: n.get("to") or "")[-1]
