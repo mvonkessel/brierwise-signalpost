@@ -1,6 +1,6 @@
 [project]
 name = "brierwise-signalpost"
-version = "0.3.1"
+version = "0.4.2"
 description = "Evidence-bounded company profiles for Norwegian organisation numbers (Builderr Signalpost challenge)"
 readme = "README.md"
 requires-python = ">=3.11"
