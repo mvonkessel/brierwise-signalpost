@@ -27,8 +27,9 @@ padding:3px 10px;font-size:.85rem;margin:2px 4px 2px 0}.st-available{color:var(-
 table{border-collapse:collapse;width:100%}td,th{border-bottom:1px solid var(--line);padding:6px 8px;text-align:left;
 vertical-align:top}th{font-weight:600}sup a{text-decoration:none;font-size:.75rem}.ev{font-size:.85rem;
 word-break:break-word}.list .item{display:grid;grid-template-columns:auto 1fr auto;gap:4px 12px;align-items:start}
-.num{text-align:right;font-variant-numeric:tabular-nums}td.when{white-space:nowrap}button{padding:8px 14px;border-radius:6px;border:1px solid
+.num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}td.when{white-space:nowrap}button{padding:8px 14px;border-radius:6px;border:1px solid
 var(--acc);background:var(--acc);color:#fff;font-size:.95rem}button:disabled{opacity:.45}
+.acc th:first-child{position:sticky;left:0;background:var(--card);z-index:1}
 @media (max-width:640px){.hide-s{display:none}td,th{padding:5px 4px}}
 """
 
@@ -93,9 +94,9 @@ def accounts_table(claims: list, refs) -> str:
     for c in claims:
         if c["field"] in names and c["availability"] == "available":
             cell[(c["field"], c["value"].get("accounts_type"), c.get("reporting_period"))] = c
-    head = "".join('<th class=num>%s%s<div class=mut>%s, %s</div></th>' % (
+    head = "".join('<th class=num>%s%s<div class=mut>%s · %s</div></th>' % (
         e(_end(c)[:4]), refs(c["evidence_ids"]), e(ACCOUNT_TYPE_TEXT.get(c["value"].get("accounts_type"),
-                                                                        c["value"].get("accounts_type"))),
+                                                                        c["value"].get("accounts_type")).split()[0]),
         e(c["value"].get("currency") or "")) for c in cols)
     rows = []
     for n in names:
@@ -107,7 +108,7 @@ def accounts_table(claims: list, refs) -> str:
                                          refs(x["evidence_ids"])) if x else "<td class='num mut'>–</td>"
             for x in cs)))
     notes = "".join("<p class=mut>%s: %s</p>" % (e(_end(c)[:4]), e(c["note"])) for c in cols if c.get("note"))
-    return ('<div style="overflow-x:auto"><table><tr><th>Period (ending)</th>%s</tr>%s</table></div>%s' % (
+    return ('<div style="overflow-x:auto"><table class=acc><tr><th>Year ending</th>%s</tr>%s</table></div>%s' % (
         head, "".join(rows), notes))
 
 
