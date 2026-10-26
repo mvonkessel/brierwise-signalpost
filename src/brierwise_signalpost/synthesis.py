@@ -257,14 +257,21 @@ def synthesize(env) -> dict:
         unknown.append(("dated public activity", "not_available", [site]))
     if not emp:
         e = by.get("registered_employees", [])
-        if e:
+        latest = latest_accounts(env.claims)
+        pay = value_of("payroll_costs", "selskap", latest[0]["reporting_period"]) if latest else None
+        if pay and pay["value"]["amount"] > 0:
+            say("employees", "The register publishes no employee count, but the %s accounts show payroll costs of %s." %
+                (period_end(pay)[:4], money(pay["value"])), e + [pay])
+        elif e:
             unknown.append(("number of employees", e[0]["availability"], e))
     # unknowns
     labels = {"not_available": "not found in the checked sources", "blocked": "the source refused the request",
               "failed": "the source could not be read in this run", "ambiguous": "a candidate could not be tied to "
               "this exact company", "not_applicable": "does not apply"}
     for what, state, claims in unknown:
-        say("unknown", "Unknown %s: %s." % (what, labels.get(state, state)), claims)
+        note = next((c.get("note") for c in claims if c.get("note")), None) if what in (
+            "hiring", "official website", "annual accounts") else None
+        say("unknown", "Unknown %s: %s%s." % (what, labels.get(state, state), "; " + note if note else ""), claims)
     return {"method": "deterministic templates over this envelope's claims; no language model",
             "sentences": out}
 

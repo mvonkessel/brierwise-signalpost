@@ -16,19 +16,32 @@ PYTHONPATH=src python -m brierwise_signalpost run \
   --output out/envelopes.jsonl \
   --report out/run-report.json \
   --site out/site \
-  [--previous previous/envelopes.jsonl] [--run-id ID] [--workers 12] [--expected-count N] [--nav-days 200]
+  [--previous previous/envelopes.jsonl | --no-previous] [--run-id ID] [--workers 12] [--expected-count N]
+  [--nav-days 200]
 ```
 
 The batch file may be JSON Lines (`{"organisation_number": "923609016"}` per line), a JSON list or
 `{"organisation_numbers": [...]}`, CSV with or without a header (the first nine-digit field counts), or plain digits
 one per line. The run writes exactly one terminal envelope per distinct input number, in input order, a
 machine-readable run report, and (with `--site`) a static profile site. A crashed run resumes from
-`<output>.partial` when started again with the same `--run-id`. With `--previous`, each envelope lists material
-changes since that run and keeps facts that disappeared, with their original evidence, under `history`. A fact whose
-source failed in this run (the website timed out, the accounts service was down) is not reported as removed: its last
-supported value stays as a claim marked `carried_forward`, with its original evidence and retrieval time, next to the
-failed claim. Between two agent versions only the value fields both versions write are compared, so a new output
-field is not reported as a change of the company.
+`<output>.partial` when started again with the same `--run-id`.
+
+Refresh: running the same command again is a refresh. The envelopes the earlier run left at `--output` are kept as
+`snapshots/envelopes-<run id>.jsonl` next to it and serve as the previous run (or name one with `--previous`; switch
+it off with `--no-previous`). Each envelope then lists material changes since that run and keeps facts that
+disappeared, with their original evidence, under `history`. Re-running on unchanged sources gives no change. What is
+not a change of the company is not reported as one:
+
+- a fact whose source failed in this run (the website timed out, the accounts service was down) stays as a claim
+  marked `carried_forward`, with its original evidence and retrieval time, next to the failed claim; the website
+  verified in the previous run is always checked again, and when it cannot be read the website is `failed`, not
+  `not_available`;
+- facts that are new only because their source failed in the previous run, or because a newer agent version writes a
+  field the previous one did not, are counted under `refresh.first_observed`, not as added;
+- dated items that leave a sliding window (register events older than 13 months, a site's older posts, older
+  accounts years) move to `history`, not to the changes; register update times are compared as UTC dates, because
+  the register gives the same update sometimes in local time and sometimes in UTC;
+- between two agent versions only the value fields both versions write are compared.
 
 Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
@@ -94,8 +107,8 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
 - No language model is used; synthesis is deterministic and cites claims.
 - Outbound URL policy: http and https only, ports 80 and 443, no credentials in URLs, every host (and every redirect
   target) must resolve to public addresses; per-host spacing (one request per second for company sites, 20 per second
-  for the register, at most 50 per second and 12 at a time for Nav's feed), timeouts, a 3 MB size limit, a time
-  budget per company and 15 minutes for the Nav index (after that it is marked partial and absence of ads is not
+  for the register, at most 50 per second and 20 at a time for Nav's feed), timeouts, a 3 MB size limit, a time
+  budget per company and 25 minutes for the Nav index (after that it is marked partial and absence of ads is not
   claimed).
 - Secrets: none. The Nav public token is fetched at run time and never written to disk.
 - Third-party cost: 0 USD per run without a search key.
@@ -138,9 +151,26 @@ with 12 workers (per company p50 10.0 s, p95 19.5 s; 434 hiring steps waited for
 19,702 requests, job ads at 4 companies; one registered website timed out in the TLS handshake and was reported as
 removed, which is why a failed source now keeps the previous value instead.
 
-Known gaps: Regnskapsregisteret answered HTTP 503 for every request during the local runs (25–26 October 2026), so
-the accounts section is `failed` there and the run report shows it; sites whose TLS certificate chain cannot be
-verified are not read; parked and directory domains are rejected.
+Annual accounts and refresh (v0.4, 26 October 2026 afternoon, when Regnskapsregisteret answered again). The open
+accounts API returns the filed accounts of the last three years, oldest first; v0.4 lists company accounts before
+group accounts, newest first, marks the latest period and keeps the currency as filed (the largest groups file in
+USD). Every account figure of the 100-company smoke test was compared with a fresh read of the API by a separate
+script: 4,466 of 4,466 equal, none missing. 1,000-company scale test with v0.4.1 (same seed as above): 1,000 envelopes
+in 470 s with 12 workers (per company p50 4.7 s, p95 13.6 s), 18,024 requests; accounts for 998 companies (two answered
+HTTP 500 and are `failed`), verified websites 136, ambiguous register websites 31 (mostly sites of a manager or parent
+company: housing co-ownerships listing their manager, property companies listing their group). The new website gates
+added 6 verified sites, each reviewed by hand. Refresh against the v0.3.0 run of the same sample showed three kinds of
+false change, all fixed in v0.4.2: accounts reported as added although the service had only been down before, register
+events whose date flipped between local time and UTC, and a website reported as removed while it only failed to
+answer. Running v0.4.2 twice on the same 37 companies gave no change; a website that timed out in the second run was
+kept as `carried_forward`.
+
+The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
+October 2026; 20 parallel reads, at most 50 per second).
+
+Known gaps: sites whose TLS certificate chain cannot be verified are not read; parked and directory domains are
+rejected; without a search key, companies whose website is neither in the register nor at a domain built from their
+name or their registered e-mail domain stay without a website.
 
 ## Licence
 

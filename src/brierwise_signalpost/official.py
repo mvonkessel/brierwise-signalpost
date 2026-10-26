@@ -312,6 +312,17 @@ EVENTS = (
 )
 
 
+def utc_date(ts: str | None) -> str:
+    """Calendar date in UTC. The update stream gives the same update sometimes in local time («…T00:01+02:00») and
+    sometimes in UTC («…T22:01Z» the day before); cutting the string would make an event's date flip between runs."""
+    from datetime import datetime, timezone
+    try:
+        dt = datetime.fromisoformat((ts or "").replace("Z", "+00:00"))
+    except ValueError:
+        return (ts or "")[:10]
+    return (dt.astimezone(timezone.utc) if dt.tzinfo else dt).strftime("%Y-%m-%d")
+
+
 def _num(v) -> str:
     try:
         x = float(v)
@@ -349,7 +360,7 @@ def fetch_updates(client, env: Envelope, months: int = 13, limit: int = 10) -> d
         return {"events": [], "employees": []}
     events, staff = [], []
     for u, s in rows:
-        date = (u.get("dato") or "")[:10]
+        date = utc_date(u.get("dato"))
         patch = u.get("endringer") or []
         seen = set()
         for op in patch:

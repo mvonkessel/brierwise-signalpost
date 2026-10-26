@@ -50,7 +50,7 @@ class NavIndex:
     """Every ad that Nav's feed lists as active (latest state of the changes of the last `days` days), keyed by the
     employer's organisation number. `start()` loads it in a background thread; `wait()` blocks until it is ready."""
 
-    def __init__(self, client, days: int = 200, max_pages: int = 800, workers: int = 12, budget_s: float = 900.0):
+    def __init__(self, client, days: int = 200, max_pages: int = 800, workers: int = 20, budget_s: float = 1500.0):
         self.client, self.days, self.max_pages, self.workers = client, days, max_pages, workers
         self.budget_s = budget_s         # wall-clock limit for the whole index: a slow feed must not hold the batch
         self.out_of_time = False

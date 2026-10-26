@@ -255,6 +255,45 @@ class Core(unittest.TestCase):
         page.feed("<html><head><title>Snekker Hansen</title></head><body>Vi bygger hus.</body></html>")
         self.assertFalse(placeholder(page))
 
+    def test_refresh_first_observed_and_sliding_windows(self):
+        rev = claim("revenue", {"amount": 5.0, "currency": "NOK", "accounts_type": "selskap"}, section="annual_accounts",
+                    reporting_period="2025-01-01/2025-12-31")
+        ev_old = claim("register_event", {"date": "2025-09-01", "event": "business address changed"},
+                       section="hiring_activity")
+        ev_new = claim("register_event", {"date": "2026-10-01", "event": "annual accounts for 2025 filed"},
+                       section="hiring_activity")
+        a = env_with([claim("legal_name", "X AS"), claim("annual_accounts", None, section="annual_accounts",
+                                                         availability="failed"), ev_old])
+        b = env_with([claim("legal_name", "X AS"), rev, ev_new])
+        observed = []
+        changes, history = compare(a, b, [], observed)
+        self.assertEqual([(c["field"], c["change"]) for c in changes], [("register_event", "added")])
+        self.assertEqual([o["field"] for o in observed], ["revenue"])           # the accounts service was down before
+        self.assertEqual([h["claim"]["field"] for h in history], ["register_event"])  # out of the window, not removed
+        a["run"]["agent_version"], b["run"]["agent_version"] = "0.3.0", "0.4.0"
+        b["claims"].append(claim("payroll_costs", {"amount": 1.0, "currency": "NOK", "accounts_type": "selskap"},
+                                 section="annual_accounts", reporting_period="2025-01-01/2025-12-31"))
+        observed = []
+        compare(a, b, [], observed)
+        self.assertEqual(sorted(o["field"] for o in observed), ["payroll_costs", "revenue"])
+
+    def test_update_dates_in_utc(self):
+        from brierwise_signalpost.official import utc_date
+        self.assertEqual(utc_date("2026-07-01T00:01:06.025+02:00"), utc_date("2026-06-30T22:01:06.025Z"))
+        self.assertEqual(utc_date("2025-11-13"), "2025-11-13")
+
+    def test_keep_snapshot(self):
+        import os
+        import tempfile
+        from brierwise_signalpost.__main__ import keep_snapshot
+        with tempfile.TemporaryDirectory() as d:
+            out = os.path.join(d, "envelopes.jsonl")
+            with open(out, "w", encoding="utf-8") as fh:
+                fh.write(json.dumps({"organisation_number": "923609016", "run": {"run_id": "run-1"}}) + "\n")
+            copy = keep_snapshot(out)
+            self.assertTrue(copy.endswith(os.path.join("snapshots", "envelopes-run-1.jsonl")))
+            self.assertTrue(os.path.exists(copy))
+
     def test_refresh_new_accounts_year(self):
         def acc(field, year, amount):
             return claim(field, {"amount": amount, "currency": "NOK", "accounts_type": "selskap"},

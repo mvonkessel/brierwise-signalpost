@@ -26,10 +26,18 @@ MATERIAL = {
     "register_event": lambda v: (v.get("date"), v.get("event")),
 }
 ACCOUNT_FIELDS = {name for name, _ in _ACCOUNTS}      # one fact per (field, accounts type, reporting period)
+# Dated items that drop out of a sliding window (the register's last 13 months, a site's latest posts) did not stop
+# having happened: they go to history, not to the changes.
+DATED = {"register_event", "dated_activity"}
 # field -> the claim whose failed or blocked state in this run means the field could not be re-checked
 SOURCE_OF = {"official_website": "official_website", "public_brand": "official_website",
              "company_profile": "official_website", "dated_activity": "official_website"}
 SOURCE_OF.update({f: "annual_accounts" for f in ACCOUNT_FIELDS})
+SOURCE_OF.update({"job_posting": "job_postings", "register_event": "register_events", "role": "roles",
+                  "registered_workplace": "registered_workplaces"})
+SOURCE_OF.update({f: "legal_name" for f in ("organisation_form", "registry_status", "business_address", "postal_address",
+                                            "industry_codes", "registered_employees", "registry_website",
+                                            "share_capital", "registered_purpose", "part_of_group")})
 
 
 def _comparable(a, b, same_version: bool):
@@ -61,15 +69,18 @@ def _facts(env: dict) -> dict:
     return out
 
 
-def compare(prev: dict | None, cur: dict, carried: list | None = None) -> tuple[list, list]:
+def compare(prev: dict | None, cur: dict, carried: list | None = None, observed: list | None = None) -> tuple[list, list]:
     """Return (changes, history) for one company. Facts whose source failed in this run are appended to `carried`
-    (previous claim plus its evidence) instead of being reported as removed."""
+    (previous claim plus its evidence) instead of being reported as removed. Facts that are new only because their
+    source failed in the previous run, or because a newer agent version writes a field the previous one did not, are
+    appended to `observed` instead of being reported as added: the company did not change."""
     if not prev:
         return [], []
     old, new = _facts(prev), _facts(cur)
     pev = {e["id"]: e for e in prev.get("evidence", [])}
     same_version = (prev.get("run") or {}).get("agent_version") == (cur.get("run") or {}).get("agent_version")
-    failed = _failed_sources(cur)
+    failed, prev_failed = _failed_sources(cur), _failed_sources(prev)
+    prev_fields = {c.get("field") for c in prev.get("claims", [])}
     changes, history = [], []
     for key in sorted(set(old) | set(new), key=str):
         a, b = old.get(key), new.get(key)
@@ -83,6 +94,14 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None) -> tuple[
                 history.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                                 "run_id": prev.get("run", {}).get("run_id")})
         elif b:
+            why = ("its source (%s) failed in the previous run" % SOURCE_OF[field] if SOURCE_OF.get(field) in
+                   prev_failed else "the previous agent version did not write this field" if not same_version and
+                   field not in prev_fields else None)
+            if why:
+                if observed is not None:
+                    observed.append({"field": field, "reporting_period": b.get("reporting_period"),
+                                     "evidence_ids": b["evidence_ids"], "reason": why})
+                continue                      # first observed, not a change of the company
             changes.append({"field": field, "change": "added", "before": None, "after": b["value"],
                             "reporting_period": b.get("reporting_period"), "evidence_ids": b["evidence_ids"],
                             "previous_run": prev.get("run", {}).get("run_id")})
@@ -91,7 +110,7 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None) -> tuple[
                 carried.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                                 "run_id": prev.get("run", {}).get("run_id"), "failed_source": SOURCE_OF[field]})
                 continue                      # not re-checked in this run: kept, not removed
-            if field in ACCOUNT_FIELDS:
+            if field in ACCOUNT_FIELDS or field in DATED:
                 history.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                                 "run_id": prev.get("run", {}).get("run_id")})
                 continue                      # older periods are preserved, not reported as removed

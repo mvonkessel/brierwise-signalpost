@@ -354,7 +354,8 @@ DECLARED = {"registry_listed": "listed by the company in the register",
 ORIGIN_NOTE = {"name_full": "; found by a domain check of the legal name",
                "name_short": "; found by a domain check of the shortened legal name",
                "email_domain": "; candidate from the domain of the company's registered e-mail address",
-               "search_candidate": "; candidate from a web search, verified on the site itself"}
+               "search_candidate": "; candidate from a web search, verified on the site itself",
+               "previous_run": "; the site verified in the previous run, checked again"}
 # Mail and internet providers: the domain of a registered address there says nothing about the company's own site.
 FREE_MAIL = {"gmail.com", "googlemail.com", "hotmail.com", "hotmail.no", "outlook.com", "outlook.no", "live.no",
              "live.com", "msn.com", "yahoo.com", "yahoo.no", "ymail.com", "icloud.com", "me.com", "mac.com", "aol.com",
@@ -486,7 +487,7 @@ def fetch_state(r, why) -> str:
 
 
 def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, extra: list | None = None,
-                 subunits: list | None = None) -> dict:
+                 subunits: list | None = None, previous_site: str | None = None) -> dict:
     """Return {'status', 'site', 'proof', ...}; adds website claims. `seconds` bounds the whole website stage.
 
     Candidates, in order: the register's website, homepages the company gave in its own Nav ads, the domain of its
@@ -538,21 +539,36 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
     if not registry:
         for u in search_candidates(client, env, entity):
             add(u, "search_candidate")
+    # Refresh: the site verified in the previous run is checked again; when it cannot be read now (timeout, refused
+    # connection, robots.txt), absence is not established and the website stays `failed`, not `not_available`.
+    prev_url = normalize_site(previous_site or "")
+    prev_host = site_key(urlsplit(prev_url).hostname) if prev_url else ""
+    if prev_url:
+        add(prev_url, "previous_run")
     tokens = name_tokens(name)
     deferred = None                                   # the register's own site when it failed the tests
+    prev_failed = None                                # the previous run's site when it could not be read now
     for url, origin in candidates:
         if time.monotonic() > deadline:
             env.error("website", "time budget for the website search used up")
+            if prev_host and not prev_failed:
+                prev_failed = ("failed", [], "the website search ran out of time before the site verified in the "
+                               "previous run (%s) was checked again" % prev_host, 0.9)
             break
         site = Site(client, env, url)
         site.deadline = deadline
         r, snap, why = site.get(url)
         if r is None or not r.ok:
-            if origin == "registry_listed":
-                state = fetch_state(r, why)
+            state = fetch_state(r, why)
+            is_prev = site_key(urlsplit(url).hostname) == prev_host and state in ("failed", "blocked")
+            if origin == "registry_listed" or is_prev:
                 ev = [env.cite(snap, "HTTP %s %s" % (r.status, r.error))] if snap and r is not None else []
                 reason = why or (r.error or "HTTP %s" % r.status if r is not None else "page budget used up")
-                deferred = (state, ev, "registry-listed website did not answer: %s" % reason, 0.99)
+                if origin == "registry_listed":
+                    deferred = (state, ev, "registry-listed website did not answer: %s" % reason, 0.99)
+                else:
+                    prev_failed = (state, ev, "the website verified in the previous run (%s) could not be read in "
+                                   "this run: %s" % (prev_host, reason), 0.9)
             continue
         page = parse_page(r)
         if page is None:
@@ -634,6 +650,8 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         env.claim("website_profiles", "official_website", r.final_url, ev, "available", confidence=conf,
                   note=proof + ORIGIN_NOTE.get(origin, ""))
         return {"status": "available", "site": site, "home": (r, snap, page), "origin": origin}
+    if prev_failed and not (deferred and deferred[0] in ("failed", "blocked")):
+        deferred = prev_failed                        # absence is not established while that site cannot be read
     if deferred:
         state, ev, note, conf = deferred
         env.claim("website_profiles", "official_website", None, ev, state, confidence=conf, note=note)

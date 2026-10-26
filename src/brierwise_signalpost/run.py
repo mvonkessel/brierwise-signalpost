@@ -87,7 +87,14 @@ class Pending:
         self.entity, self.subunits = entity, subunits
 
 
-def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = None, defer: bool = False):
+def previous_site(prev: dict | None) -> str | None:
+    """The official website the previous run verified, to be checked again."""
+    return next((c["value"] for c in (prev or {}).get("claims") or [] if c.get("field") == "official_website" and
+                 c.get("availability") == "available" and isinstance(c.get("value"), str)), None)
+
+
+def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = None, defer: bool = False,
+             prev_site: str | None = None):
     """One company: official layer, Nav ads, website. Returns the finished envelope, or a `Pending` when `defer` is set
     and the Nav index is still loading (the website search then runs before the hiring step)."""
     t0 = time.monotonic()
@@ -109,7 +116,8 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
                 else:
                     hired = jobs(cc, env, nav, off["entity"], off["subunits"]) if nav else {"homepages": []}
                 extra = [(u, "nav_employer_homepage") for u, _ in hired["homepages"]]
-                found = find_website(cc, env, off["entity"], extra=extra, subunits=off["subunits"])
+                found = find_website(cc, env, off["entity"], extra=extra, subunits=off["subunits"],
+                                     previous_site=prev_site)
                 if found.get("status") == "available":
                     extract_site(cc, env, found)
     except Exception as exc:                       # one broken company must not break the batch
@@ -183,21 +191,22 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
 
         def record(o: str, env: dict) -> None:
             p = prev.get(o)
-            carried = []
-            env["changes"], env["history"] = compare(p, env, carried)
+            carried, observed = [], []
+            env["changes"], env["history"] = compare(p, env, carried, observed)
             carry_forward(env, carried)
             if env.get("synthesis") and "error" not in env["synthesis"]:
                 env["synthesis"] = with_changes(env["synthesis"], env["changes"], p, env.get("claims") or [])
             env["refresh"] = {"previous_run_id": (p or {}).get("run", {}).get("run_id"),
                               "previous_completed_at": (p or {}).get("run", {}).get("completed_at"),
                               "material_changes": len(env["changes"]), "first_run": p is None,
-                              "carried_forward": len(carried)}
+                              "carried_forward": len(carried), "first_observed": len(observed),
+                              "first_observed_reasons": dict(Counter(x["reason"] for x in observed))}
             with lock:
                 done[o] = env
                 ck.write(json.dumps(env, ensure_ascii=False) + "\n")
                 ck.flush()
 
-        futures = {pool.submit(research, client, o, run_id, nav, True): o for o in todo}
+        futures = {pool.submit(research, client, o, run_id, nav, True, previous_site(prev.get(o))): o for o in todo}
         finishing = {}
         for fut in as_completed(futures):
             o = futures[fut]
@@ -240,6 +249,7 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
         "requests_total": sum(client.requests.values()),
         "runtime_ms_p50": int(statistics.median(rt)), "runtime_ms_p95": rt[min(len(rt) - 1, int(0.95 * len(rt)))],
         "third_party_cost_usd": round(sum(done[o]["operations"].get("third_party_cost_usd", 0) for o in orgs), 4),
+        "previous_snapshot": previous, "companies_with_previous": sum(1 for o in orgs if o in prev),
         "nav_feed": ({"status": nav.status, "window_days": nav.days, "pages": nav.pages, "active_ads_listed": nav.listed,
                       "active_ads_read": nav.read, "unreadable": nav.missing, "closed_meanwhile": nav.closed,
                       "without_orgnr": nav.no_orgnr, "employer_orgnrs": len(nav.by_orgnr), "seconds": nav.seconds,
