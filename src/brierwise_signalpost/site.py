@@ -30,11 +30,19 @@ word-break:break-word}.list .item{display:grid;grid-template-columns:auto 1fr au
 .num{text-align:right;font-variant-numeric:tabular-nums;white-space:nowrap}td.when{white-space:nowrap}button{padding:8px 14px;border-radius:6px;border:1px solid
 var(--acc);background:var(--acc);color:#fff;font-size:.95rem}button:disabled{opacity:.45}
 .acc th:first-child{position:sticky;left:0;background:var(--card);z-index:1}
-@media (max-width:640px){.hide-s{display:none}td,th{padding:5px 4px}}
+.sig{border-left:3px solid var(--acc);padding-left:10px;font-weight:500}select{padding:7px 8px;border-radius:6px;
+border:1px solid var(--line);background:var(--card);color:var(--fg);font-size:.9rem}
+.badges{white-space:normal}
+@media (max-width:640px){.hide-s{display:none}td,th{padding:5px 4px}.list .item{grid-template-columns:auto 1fr}
+.list .item>.num{grid-column:2;text-align:left}}
 """
 
 STATE_LABEL = {"available": "found", "not_available": "not found", "blocked": "blocked", "failed": "failed",
                "ambiguous": "ambiguous", "not_applicable": "not applicable"}
+ROLE_EN = {"DAGL": "Daily manager (CEO)", "LEDE": "Chair of the board", "NEST": "Deputy chair", "MEDL": "Board member",
+           "VARA": "Deputy board member", "OBS": "Observer", "REVI": "Auditor", "REGN": "Accountant",
+           "INNH": "Owner", "DTPR": "Partner with shared liability", "DTSO": "Partner with joint liability",
+           "KONT": "Contact person", "FFØR": "Business manager"}
 SECTION_TITLE = {"legal_identity": "Legal identity", "annual_accounts": "Annual accounts",
                  "leadership_workplaces": "Leadership and workplaces", "website_profiles": "Website and own profiles",
                  "hiring_activity": "Hiring and dated activity"}
@@ -55,8 +63,9 @@ def accounts_columns(claims: list) -> list:
     return sorted(rows, key=lambda c: (c["value"] or {}).get("accounts_type") != "selskap")
 
 
-def latest_revenue(claims: list) -> dict | None:
-    cols = accounts_columns(claims)
+def latest_revenue(claims: list, kind: str | None = None) -> dict | None:
+    """Revenue of the newest accounts: company accounts when filed, else group accounts; or only the given type."""
+    cols = [c for c in accounts_columns(claims) if kind is None or c["value"].get("accounts_type") == kind]
     for col in cols[:1]:
         kind, p = col["value"].get("accounts_type"), col["reporting_period"]
         return next((c for c in claims if c["field"] == "revenue" and c["availability"] == "available" and
@@ -75,11 +84,15 @@ def summary(env: dict) -> dict:
     muni = first("municipality") or {}
     rc = latest_revenue(env.get("claims", []))
     rev = rc["value"] if rc else {}
+    gc = latest_revenue(env.get("claims", []), "konsern")
+    grp = gc["value"] if gc else {}
     return {"o": env["organisation_number"], "n": first("legal_name") or env["organisation_number"],
             "f": form.get("code"), "m": muni.get("name"), "i": ind.get("label"), "ic": ind.get("code"),
             "r": rev.get("amount"), "rc": rev.get("currency"), "ry": _end(rc)[:4] if rc else None,
+            "g": grp.get("amount"), "gc": grp.get("currency"),
             "e": first("registered_employees"), "w": first("official_website"),
             "j": len(by.get("job_posting", [])), "p": len(by.get("company_profile", [])),
+            "a": max((x.get("date") or "" for x in by.get("dated_activity", [])), default="") or None,
             "s": first("registry_status"), "sec": env.get("sections", {})}
 
 
@@ -112,7 +125,22 @@ def accounts_table(claims: list, refs) -> str:
         head, "".join(rows), notes))
 
 
+def _plain(x) -> str:
+    """A nested value as reading text: a code with its label, a list joined, never a raw dictionary."""
+    if isinstance(x, dict):
+        if x.get("label"):
+            return "%s (%s)" % (x["label"], x["code"]) if x.get("code") else str(x["label"])
+        return ", ".join(_plain(y) for y in x.values() if y not in (None, "", [], {}))
+    if isinstance(x, list):
+        return "; ".join(_plain(y) for y in x)
+    if isinstance(x, bool):
+        return "yes" if x else "no"
+    return str(x)
+
+
 def value_text(v) -> str:
+    if isinstance(v, bool):
+        return "yes" if v else "no"
     if isinstance(v, dict):
         if "amount" in v:
             return "%s %s" % (format(v["amount"], ",.0f").replace(",", " "), v.get("currency") or "")
@@ -124,19 +152,30 @@ def value_text(v) -> str:
             return ('<a href="%s" rel="nofollow noopener">%s</a>' % (e(link), t) if link else t) + \
                 " <span class=mut>%s</span>" % e(v.get("published") or v.get("date"))
         if "role" in v:
-            return "%s: %s" % (e(v["role"]), e(v["name"]))
+            en = ROLE_EN.get(v.get("role_code"))
+            return "%s: %s" % ("%s (%s)" % (en, e(v["role"])) if en else e(v["role"]), e(v["name"]))
         if "event" in v:
             return "%s <span class=mut>%s</span>" % (e(v["event"]), e(v.get("date")))
         if set(v) <= {"code", "label"} and v.get("label"):
             return "%s (%s)" % (e(v["label"]), e(v.get("code")))
         if set(v) <= {"name", "number"} and v.get("name"):
             return "%s (%s)" % (e(str(v["name"]).title()), e(v.get("number")))
-        return e(", ".join("%s: %s" % (k.replace("_", " "), x) for k, x in v.items() if x not in (None, "", [])))
+        if v.get("organisation_number") and v.get("name"):          # a registered workplace (subunit)
+            bits = ["%s (%s)" % (e(v["name"]), e(v["organisation_number"]))]
+            bits += [e(_plain(v[k])) for k in ("address", "industry") if v.get(k)]
+            if v.get("employees") is not None:
+                bits.append("%s employees" % e(v["employees"]))
+            if v.get("website"):
+                bits.append(e(v["website"]))
+            return " · ".join(bits)
+        return e(", ".join("%s: %s" % (k.replace("_", " "), _plain(x)) for k, x in v.items()
+                           if x not in (None, "", [], {})))
     if isinstance(v, list):
         if v and all(isinstance(x, dict) and "employees" in x for x in v):
             return e("; ".join("%s: %s" % (x.get("date"), x.get("employees")) for x in v))
         return e("; ".join(("%s (%s)" % (x.get("label"), x.get("code")) if x.get("code") and x.get("label") else
-                            x.get("label") or x.get("name") or str(x)) if isinstance(x, dict) else str(x) for x in v))
+                            x.get("label") or x.get("name") or _plain(x)) if isinstance(x, dict) else _plain(x)
+                           for x in v))
     if isinstance(v, str) and v.startswith("http"):
         return '<a href="%s" rel="nofollow noopener">%s</a>' % (e(v), e(v))
     return e(v)
@@ -157,7 +196,8 @@ def company_page(env: dict) -> str:
     syn = (env.get("synthesis") or {}).get("sentences") or []
     if syn:
         out.append('<h2>Summary</h2><div class=card>')
-        out += ["<p>%s%s</p>" % (e(x["text"]), refs(x["evidence_ids"])) for x in syn]
+        out += ["<p%s>%s%s</p>" % (" class=sig" if x["topic"] == "signals" else "", e(x["text"]),
+                                    refs(x["evidence_ids"])) for x in syn]
         out.append('<p class=mut>%s</p></div>' % e((env.get("synthesis") or {}).get("method", "")))
     for sec, title in SECTION_TITLE.items():
         rows = [c for c in env.get("claims", []) if c["section"] == sec]
@@ -204,22 +244,27 @@ def company_page(env: dict) -> str:
 
 INDEX_JS = """
 const D=window.SIGNALPOST;const q=document.getElementById('q');const list=document.getElementById('list');
-const sel=new Set();const cmp=document.getElementById('cmp');const nf=new Intl.NumberFormat('en');
+const sel=new Set();const cmp=document.getElementById('cmp');const sort=document.getElementById('sort');
+const cf=new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:1});
 const F={web:x=>!!x.w,jobs:x=>x.j>0,acc:x=>x.r!=null,active:x=>x.s==='active'};const on=new Set();
 document.querySelectorAll('[data-f]').forEach(b=>b.addEventListener('change',ev=>{ev.target.checked?on.add(ev.target.
 dataset.f):on.delete(ev.target.dataset.f);draw()}));
-function draw(){const t=q.value.trim().toLowerCase();let n=0;const rows=[];for(const x of D){if(t&&!(x.n+' '+x.o+' '+
+const by=k=>(a,b)=>{const x=a[k],y=b[k];return x==null?(y==null?0:1):y==null?-1:(y>x?1:y<x?-1:0)};
+function draw(){const t=q.value.trim().toLowerCase();let n=0;const rows=[];const S=sort.value==='n'?D:[...D].sort(
+by(sort.value));for(const x of S){if(t&&!(x.n+' '+x.o+' '+
 (x.m||'')+' '+(x.i||'')).toLowerCase().includes(t))continue;let ok=true;for(const f of on)if(!F[f](x))ok=false;
 if(!ok)continue;if(++n>400)break;rows.push(`<div class="card item"><input type=checkbox aria-label="compare ${x.n}"
  ${sel.has(x.o)?'checked':''} onchange="tog('${x.o}',this.checked)"><div><a href="company/${x.o}.html">${esc(x.n)}</a>
 <div class=mut>${x.o} · ${x.f||''} · ${esc(tc(x.m||''))} · ${esc(x.i||'')}</div></div><div class=num>${
-x.r!=null?esc(x.rc||'')+' '+nf.format(Math.round(x.r/1e3))+'k <span class=mut>'+esc(x.ry||'')+'</span>':''}<div class=mut>${x.w?'website':''}${x.j?' · '+x.j+' jobs':''}
-</div></div></div>`)}list.innerHTML=rows.join('')||'<p class=mut>No company matches.</p>';
+x.r!=null?esc(x.rc||'')+' '+cf.format(x.r)+' <span class=mut>'+esc(x.ry||'')+'</span>':''}<div class="mut badges">${[x.e!=null?
+x.e+' staff':'',x.w?'website':'',x.p?x.p+' profiles':'',x.j?x.j+' jobs':'',x.a?'news '+esc(x.a.slice(0,7)):''].filter(
+Boolean).join(' · ')}</div></div></div>`)}list.innerHTML=rows.join('')||'<p class=mut>No company matches.</p>';
 document.getElementById('cnt').textContent=n>400?'first 400 shown':n+' shown'}
 function esc(s){return String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]))}
 function tc(s){return String(s).toLowerCase().replace(/(^|[\\s-])\\S/g,c=>c.toUpperCase())}
 function tog(o,c){c?sel.add(o):sel.delete(o);cmp.disabled=sel.size<2||sel.size>4}
-cmp.addEventListener('click',()=>location.href='compare.html#'+[...sel].join(','));q.addEventListener('input',draw);draw();
+cmp.addEventListener('click',()=>location.href='compare.html#'+[...sel].join(','));q.addEventListener('input',draw);
+sort.addEventListener('change',draw);draw();
 """
 
 COMPARE_JS = """
@@ -227,11 +272,12 @@ const D=window.SIGNALPOST;const ids=location.hash.slice(1).split(',');const X=D.
 function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 function tc(s){return String(s).toLowerCase().replace(/(^|[\\s-])\\S/g,c=>c.toUpperCase())}
 const url=u=>/^https?:\\/\\//i.test(u||'')?esc(u):'';
-const nf=new Intl.NumberFormat('en');const rows=[['Organisation number',x=>esc(x.o)],['Legal form',x=>esc(x.f||'')],
+const nf=new Intl.NumberFormat('en',{notation:'compact',maximumFractionDigits:1});const rows=[['Organisation number',x=>esc(x.o)],['Legal form',x=>esc(x.f||'')],
 ['Municipality',x=>esc(tc(x.m||''))],['Industry',x=>esc(x.i||'')],['Status',x=>esc(x.s||'')],
-['Revenue (latest filed)',x=>x.r!=null?esc(x.rc||'')+' '+nf.format(x.r)+(x.ry?' ('+esc(x.ry)+')':''):'not found'],['Registered employees',x=>esc(x.e??'not published')],
+['Revenue (latest filed)',x=>x.r!=null?esc(x.rc||'')+' '+nf.format(x.r)+(x.ry?' ('+esc(x.ry)+')':''):'not found'],
+['Group revenue, as parent company',x=>x.g!=null?esc(x.gc||'')+' '+nf.format(x.g):'no group accounts'],['Registered employees',x=>esc(x.e??'not published')],
 ['Website',x=>url(x.w)?`<a href="${url(x.w)}" rel="nofollow noopener">${url(x.w)}</a>`:'not verified'],
-['Own profiles',x=>esc(x.p)],['Active Nav job ads',x=>esc(x.j)]];
+['Own profiles',x=>esc(x.p)],['Active Nav job ads',x=>esc(x.j)],['Latest own news',x=>esc(x.a||'none found')]];
 document.getElementById('t').innerHTML='<tr><th></th>'+X.map(x=>`<th><a href="company/${esc(x.o)}.html">${esc(x.n)}</a></th>`).
 join('')+'</tr>'+rows.map(([k,f])=>'<tr><th>'+k+'</th>'+X.map(x=>'<td>'+f(x)+'</td>').join('')+'</tr>').join('');
 """
@@ -260,11 +306,14 @@ def build(envelopes_path: str, out_dir: str) -> int:
                  '<label class=chip><input type=checkbox data-f=web> verified website</label><label class=chip>'
                  '<input type=checkbox data-f=jobs> hiring</label><label class=chip><input type=checkbox data-f=acc>'
                  ' accounts found</label><label class=chip><input type=checkbox data-f=active> active</label>'
-                 '<span id=cnt class=mut></span><button id=cmp disabled>Compare selected</button></div>'
+                 '<select id=sort aria-label="Sort by"><option value=n>Name A–Z</option><option value=r>Revenue, '
+                 'highest first</option><option value=e>Employees, most first</option><option value=a>Latest news '
+                 'first</option></select><span id=cnt class=mut></span><button id=cmp disabled>Compare selected '
+                 '(2 to 4)</button></div>'
                  '<div id=list class=list></div></main><script src="data.js"></script><script>%s</script>'
                  '</body></html>' % (len(data), INDEX_JS))
     with open(os.path.join(out_dir, "compare.html"), "w", encoding="utf-8") as fh:
         fh.write(head % ("Compare companies", CSS) + '<header><a href="index.html">← All companies</a><h1>Compare'
-                 '</h1></header><main><div class=card style="overflow-x:auto"><table id=t></table></div></main>'
+                 '</h1></header><main><div class=card style="overflow-x:auto"><table id=t class=acc></table></div></main>'
                  '<script src="data.js"></script><script>%s</script></body></html>' % COMPARE_JS)
     return len(data)

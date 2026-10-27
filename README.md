@@ -23,8 +23,10 @@ PYTHONPATH=src python -m brierwise_signalpost run \
 The batch file may be JSON Lines (`{"organisation_number": "923609016"}` per line), a JSON list or
 `{"organisation_numbers": [...]}`, CSV with or without a header (the first nine-digit field counts), or plain digits
 one per line. The run writes exactly one terminal envelope per distinct input number, in input order, a
-machine-readable run report, and (with `--site`) a static profile site. A crashed run resumes from
-`<output>.partial` when started again with the same `--run-id`.
+machine-readable run report, and (with `--site`) a static profile site: search, filters, sorting by revenue, staff
+or latest news, a comparison of two to four companies, and a page per company that opens with its key signals and
+links every fact to its evidence, on desktop and mobile, from a plain folder without a server. A crashed run resumes
+from `<output>.partial` when started again with the same `--run-id`.
 
 Refresh: running the same command again is a refresh. The envelopes the earlier run left at `--output` are kept as
 `snapshots/envelopes-<run id>.jsonl` next to it and serve as the previous run (or name one with `--previous`; switch
@@ -92,8 +94,17 @@ looked for on the home page and up to three contact or about pages of the same s
    entity that the page prints with its legal form (a sister company's site at the same address) (0.85). This is the «legal name plus
    leadership» combination named in the challenge's playbook; the quoted span shows the name as the site prints it.
 
-Gates 2 to 6 never accept a placeholder page (parked, for sale, under construction, switched off), a site that calls
-itself by another legal entity's name, or a sole proprietorship (which needs its organisation number on the site).
+Gates 2 to 6 never accept a placeholder page (parked, for sale, under construction, switched off, or a registrar's
+parking page that names the domain), a site that calls itself by another legal entity's name, or a sole
+proprietorship (which needs its organisation number on the site).
+
+The register gives a host, not a URL. When a host the company gave (register, own Nav ad, workplace, the domain of
+its registered e-mail address, or the site verified in the previous run) does not resolve, the same domain with or
+without «www.» is tried once; when any candidate's certificate is valid only for the other of these two names, that
+name is tried; when a host the company gave refuses connections on the https port, it is read over plain http, and
+then only gates 1, 2 and 6 (organisation number, registered address, registered leader) can publish it, because a
+domain kept only over plain http is often a neglected or re-registered one. Certificate checks are never relaxed,
+and the claim's note says at which address the site was read.
 Parent, group, manager and brand sites that fail these gates stay unpublished; housing co-ownerships, for example,
 often list their manager's site in the register, which is reported as `ambiguous` with the reason. A platform page (Facebook, Instagram, LinkedIn
 ...) given as the website in the register is published as a declared company profile without fetching the platform.
@@ -108,6 +119,10 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
   taken for «KAI MARKETING AS»), at most two accounts per platform, the same account only once whatever scheme, host
   or case the link uses, LinkedIn pages in their canonical form `/company/<name>`; or when the company gives the
   profile as its website in the register. No platform is scraped.
+- A careers page is the first link on the verified home page whose path names careers or jobs as a whole word
+  («karriere», «jobb», «jobbe», «stillinger», «careers», «jobs» ...) or whose short navigation text does; «jobber»
+  (works), «jobben» (the job, in a story), «bestillinger» (orders) and «ledige lokaler» (vacant premises) do not count.
+  JSON-LD job postings on it are listed. Absence of Nav ads is stated only when the whole feed was read.
 - Dated items from the verified site: JSON-LD articles on its news page, its RSS/Atom feed, the WordPress posts API,
   and news listings: a block (article, list item, or a card whose class names a news item, post or card) with
   exactly one date, its `<time datetime>` or the one full date printed in it, and a title (heading or title
@@ -121,7 +136,11 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
   domain).
   Declared cost estimate: 0.005 USD per query, reported per envelope and per run. Without the key the agent makes no
   search requests and costs nothing.
-- No language model is used; synthesis is deterministic and cites claims.
+- No language model is used; synthesis is deterministic and cites claims. It opens with one line of key signals
+  for someone who wants to apply, sell, partner or invest: the direction of revenue against the previous filed
+  year, the operating result, equity as a share of total assets (for a parent company from its group accounts; both
+  shares are computed from the filed figures and say so), staff and its trend in the register's monthly series,
+  hiring, and the date of the latest own news. The sentences that follow give the details with their sources.
 - Outbound URL policy: http and https only, ports 80 and 443, no credentials in URLs, every host (and every redirect
   target) must resolve to public addresses; per-host spacing (one request per second for company sites, 20 per second
   for the register, at most 50 per second and 20 at a time for Nav's feed), timeouts, a 3 MB size limit, a time
@@ -214,6 +233,21 @@ version found an offer with a departure date on a home page, a category link tak
 carried the category and the date (parts of a card had counted as cards of their own), and a container whose one
 date belonged to another item than its first heading; the rules above remove all of these, and checked again on
 the same pages they keep every correct item.
+
+Version 0.7.0 (27 October 2026). Second addresses: on Builderr's sample the register lists www.02365.no for a taxi
+company whose certificate is valid only for 02365.no; read there, it gives 75 verified websites instead of 74 and own
+profiles at 40 companies instead of 39. In the 1,000-company scale sample (seed 20261028) two sites were added this
+way (one whose «www.» name does not resolve, showing the organisation number; one whose certificate is valid only for
+«www.», showing name and registered address), and four registered hosts that could not be read now get a clear
+state (`ambiguous`): three answer only over plain http with a parking page or an empty directory listing (two of them
+a registrar's «<domain> is parked» page, which the placeholder test did not know yet; gates 3 and 4 would have
+published them, hence the stricter rule for plain http), and one shows another legal entity. Careers pages: a review of all 49 careers pages published in both samples found 11 that were not careers pages
+(vacant premises or flats, customer orders, news stories and a page whose text says «jobber» or «jobben», a services
+page, a page for residents, an advertising page); with the whole-word rule above, the 38 careers pages published for
+the same companies are all careers pages (each checked), and one company now shows its jobs page instead of its
+vacant-premises page. Facebook links to a page's tabs or its old «/pg/» form now count as the page itself, and links to
+events, videos, photos and posts are not taken for accounts. Key signals: 98 of Builderr's 100 companies get the line;
+every evidence id it cites exists in the envelope.
 
 The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
 October 2026; 20 parallel reads, at most 50 per second).
