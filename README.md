@@ -47,6 +47,35 @@ not a change of the company is not reported as one:
 
 Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
+## Smoke test (27 October 2026)
+
+`smoke-test/` holds the 100-company smoke test of this code (version 0.7.1). The batch (`smoke-test/batch.jsonl`) is
+the starter kit's standard draw, `select_entry_batch.py` with its default seed: `random.Random(20260823).sample` of 100
+rows of the public universe in file order (rebuilt in a few lines; the kit's code itself was not run). Both runs
+started from a fresh clone in an empty virtual environment without pip:
+
+```bash
+PYTHONPATH=src python -m brierwise_signalpost run --organisations smoke-test/batch.jsonl \
+  --output smoke-test/envelopes.jsonl --report smoke-test/run-1-report.json --site docs --expected-count 100
+# the same command again, with --report smoke-test/run-2-refresh-report.json
+```
+
+- First run (`run-1-report.json`): 100 of 100 envelopes, all completed, in 395 s (the Nav index: all 9,348 readable
+  active ads), 5.2 s per company at the median and 12.8 s at p95, 10,758 requests, no third-party cost, 6,870 claims.
+  Identity, accounts, leadership and hiring are available for all 100. Website: 9 verified, 3 `ambiguous` (one
+  redirects to another firm's site, one answers only over plain http without the registered address, leader or
+  number, one does not name the company), 1 `failed` (self-signed certificate), 87 `not_available`. Two companies
+  link their own profiles (5), four publish dated posts (20); none has an active Nav ad. 98 of 100 summaries carry a
+  line of key signals.
+- Refresh (`run-2-refresh-report.json`), the same command right afterwards: the first run's envelopes are kept under
+  `smoke-test/snapshots/`, all 100 companies were matched with them, 0 material changes, nothing carried forward or
+  first observed; 399 s, 10,737 requests. `smoke-test/envelopes.jsonl` is this run's output.
+- The static site of the refresh run is in `docs/` and served at https://brierwise.github.io/brierwise-signalpost/
+  (search, filters, sorting, comparison, evidence links; desktop and mobile).
+
+Random companies are mostly small: 44,855 of the 411,160 companies (10.9 %) carry a website in the published universe
+file. The evaluation below also uses Builderr's public 100-company sample, which is weighted towards larger companies.
+
 ## What an envelope contains
 
 `organisation_number`, `run` (ids, times, terminal status), `sections` (state of the five required sections),
