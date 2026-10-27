@@ -450,6 +450,19 @@ class Core(unittest.TestCase):
             copy = keep_snapshot(out)
             self.assertTrue(copy.endswith(os.path.join("snapshots", "envelopes-run-1.jsonl")))
             self.assertTrue(os.path.exists(copy))
+            here = os.getcwd()
+            try:  # a relative output gives a relative snapshot path (no local folder names in the run report)
+                os.chdir(d)
+                os.makedirs("out")
+                with open(os.path.join("out", "envelopes.jsonl"), "w", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"organisation_number": "923609016", "run": {"run_id": "run-2"}}) + "\n")
+                self.assertEqual(keep_snapshot(os.path.join("out", "envelopes.jsonl")),
+                                 os.path.join("out", "snapshots", "envelopes-run-2.jsonl"))
+                with open("envelopes.jsonl", "w", encoding="utf-8") as fh:
+                    fh.write(json.dumps({"organisation_number": "923609016", "run": {"run_id": "run-3"}}) + "\n")
+                self.assertEqual(keep_snapshot("envelopes.jsonl"), os.path.join("snapshots", "envelopes-run-3.jsonl"))
+            finally:
+                os.chdir(here)
 
     def test_refresh_new_accounts_year(self):
         def acc(field, year, amount):
