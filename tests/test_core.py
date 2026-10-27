@@ -542,5 +542,22 @@ class Core(unittest.TestCase):
         self.assertEqual(listing_items(Envelope("923609016", {}), snap, many, "https://firma.no/nyheter"), 0)
 
 
+    def test_x_profiles_one_address(self):
+        from brierwise_signalpost.website import profile_url
+        self.assertEqual(profile_url("https://twitter.com/Hexagon_Ragasco"), "https://x.com/Hexagon_Ragasco")
+        self.assertEqual(profile_url("https://mobile.twitter.com/sailormusicno/status/123?s=20"),
+                         "https://x.com/sailormusicno")
+        self.assertEqual(profile_url("https://www.x.com/BienSparebank/"), "https://x.com/BienSparebank")
+        # an earlier run that wrote the twitter.com address reports no change once the account is written as x.com
+        old = {"platform": "x", "url": "https://twitter.com/christianiataxi"}
+        a = env_with([claim("company_profile", old, section="website_profiles")])
+        b = env_with([claim("company_profile", dict(old, url="https://x.com/christianiataxi"),
+                            section="website_profiles")])
+        a["run"]["agent_version"], b["run"]["agent_version"] = "0.7.1", "0.8.0"
+        self.assertEqual(compare(a, b), ([], []))
+        b["claims"][0]["value"]["url"] = "https://x.com/someoneelse"
+        self.assertEqual(sorted(c["change"] for c in compare(a, b)[0]), ["added", "removed"])
+
+
 if __name__ == "__main__":
     unittest.main()

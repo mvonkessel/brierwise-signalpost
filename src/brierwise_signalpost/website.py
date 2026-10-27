@@ -486,6 +486,10 @@ def profile_url(url: str) -> str:
         q = "&".join(x for x in p.query.split("&") if x.startswith("id="))
         return urlunsplit((p.scheme, p.netloc, p.path, q, ""))
     parts = [x for x in p.path.split("/") if x]
+    host = (p.hostname or "").lower().removeprefix("www.").removeprefix("mobile.")
+    if host in ("twitter.com", "x.com") and parts:
+        # Twitter is now X: one account, one address («twitter.com/Name/status/1» and «x.com/Name» are «https://x.com/Name»)
+        return "https://x.com/" + parts[0]
     if (p.hostname or "").endswith("facebook.com") and parts:
         # a page's tabs and the old «/pg/» form are the same account: «/pg/name/reviews» and «/name/about» are «/name»
         parts = parts[1:] if parts[0] == "pg" and len(parts) > 1 else parts
