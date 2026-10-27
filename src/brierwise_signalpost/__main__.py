@@ -20,7 +20,7 @@ def keep_snapshot(output: str) -> str | None:
         run_id = str((first.get("run") or {}).get("run_id") or "unknown").replace("/", "_").replace("\\", "_")
     except (OSError, ValueError):
         return None
-    folder = os.path.join(os.path.dirname(os.path.abspath(output)), "snapshots")
+    folder = os.path.join(os.path.dirname(output), "snapshots")  # a relative output keeps a relative path in the report
     os.makedirs(folder, exist_ok=True)
     copy = os.path.join(folder, "envelopes-%s.jsonl" % run_id)
     if not os.path.exists(copy):
