@@ -242,8 +242,9 @@ way (one whose «www.» name does not resolve, showing the organisation number; 
 state (`ambiguous`): three answer only over plain http with a parking page or an empty directory listing (two of them
 a registrar's «<domain> is parked» page, which the placeholder test did not know yet; gates 3 and 4 would have
 published them, hence the stricter rule for plain http), and one shows another legal entity. Careers pages: a review of all 49 careers pages published in both samples found 11 that were not careers pages
-(vacant premises or flats, customer orders, news stories and a page whose text says «jobber» or «jobben», a services
-page, a page for residents, an advertising page); with the whole-word rule above, the 38 careers pages published for
+(vacant premises or flats, customer orders, and news stories and other pages whose path or link text only contained a
+part of a word such as «jobben» or «ledige»: a services page, a page for residents, an advertising page, a page about
+strain at work); with the whole-word rule above, the 38 careers pages published for
 the same companies are all careers pages (each checked), and one company now shows its jobs page instead of its
 vacant-premises page. Facebook links to a page's tabs or its old «/pg/» form now count as the page itself, and links to
 events, videos, photos and posts are not taken for accounts. Key signals: 98 of Builderr's 100 companies get the line;
