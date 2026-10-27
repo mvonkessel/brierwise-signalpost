@@ -70,7 +70,7 @@ PYTHONPATH=src python -m brierwise_signalpost run --organisations smoke-test/bat
 - Refresh (`run-2-refresh-report.json`), the same command right afterwards: the first run's envelopes are kept under
   `smoke-test/snapshots/`, all 100 companies were matched with them, 0 material changes, nothing carried forward or
   first observed; 399 s, 10,737 requests. `smoke-test/envelopes.jsonl` is this run's output.
-- The static site of the refresh run is in `docs/` and served at https://brierwise.github.io/brierwise-signalpost/
+- The static site of the refresh run is in `docs/` and served at https://mvonkessel.github.io/brierwise-signalpost/
   (search, filters, sorting, comparison, evidence links; desktop and mobile).
 
 Random companies are mostly small: 44,855 of the 411,160 companies (10.9 %) carry a website in the published universe
