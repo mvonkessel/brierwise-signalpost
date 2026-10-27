@@ -230,6 +230,108 @@ class Core(unittest.TestCase):
         self.assertEqual(fetch_state(None, "robots.txt disallows"), "blocked")
         self.assertEqual(fetch_state(None, "time budget for this company used up"), "failed")
 
+    def test_key_signals(self):
+        import types
+        from brierwise_signalpost.synthesis import synthesize
+        p25, p24 = "2025-01-01/2025-12-31", "2024-01-01/2024-12-31"
+
+        def acc(f, amount, p, kind="selskap"):
+            return claim(f, {"amount": amount, "currency": "NOK", "accounts_type": kind}, reporting_period=p)
+        claims = [claim("legal_name", "X AS"), claim("organisation_form", {"code": "AS", "label": "Aksjeselskap"}),
+                  claim("accounts_period", {"accounts_type": "selskap"}, reporting_period=p25),
+                  claim("accounts_period", {"accounts_type": "selskap"}, reporting_period=p24),
+                  acc("revenue", 110e6, p25), acc("revenue", 100e6, p24), acc("operating_result", -2e6, p25),
+                  acc("equity", 30e6, p25), acc("total_assets", 120e6, p25), claim("registered_employees", 50),
+                  claim("registered_employees_history", [{"date": "2025-10-15", "employees": 40},
+                                                         {"date": "2026-10-13", "employees": 50}]),
+                  claim("careers_page", "https://x.no/jobb/"),
+                  claim("dated_activity", {"title": "Ny avtale", "date": "2026-10-01", "url": "https://x.no/a"})]
+        # Nav's feed read only in part: no claim that there is no ad
+        s = synthesize(types.SimpleNamespace(claims=claims + [claim("job_postings", None, availability="failed")]))
+        self.assertIn("; careers page; latest own news", s["sentences"][1]["text"])
+        self.assertIn("its ads are unknown", next(x["text"] for x in s["sentences"] if x["topic"] == "hiring"))
+        claims.append(claim("job_postings", None, availability="not_available"))
+        s = synthesize(types.SimpleNamespace(claims=claims))["sentences"]
+        self.assertEqual([x["topic"] for x in s[:2]], ["identity", "signals"])
+        self.assertEqual(s[1]["text"], "Key signals: revenue NOK 110.0 million in 2025 (up 10% on 2024); operating loss "
+                                       "of NOK 2.0 million; equity 25% of total assets (computed from the filed "
+                                       "figures); 50 employees (up 25% since 2025-10-15); careers page, no active job "
+                                       "ad on Nav; latest own news 2026-10-01.")
+        # a parent company: the signals take the group accounts, the staff count stays the entity's own
+        claims += [claim("accounts_period", {"accounts_type": "konsern"}, reporting_period=p25),
+                   acc("revenue", 9e9, p25, "konsern"), acc("operating_result", 4e8, p25, "konsern")]
+        s = synthesize(types.SimpleNamespace(claims=claims))["sentences"]
+        self.assertTrue(s[1]["text"].startswith("Key signals: group revenue NOK 9.0 billion in 2025; group operating "
+                                                "profit of NOK 400.0 million; 50 employees in this entity"))
+
+    def test_facebook_page_forms(self):
+        from brierwise_signalpost.website import SOCIAL, profile_url
+        self.assertEqual(profile_url("https://www.facebook.com/pg/BibelskolenSubstans/reviews"),
+                         "https://www.facebook.com/BibelskolenSubstans")
+        self.assertEqual(profile_url("https://facebook.com/StrategicaPP/about?ref=x"), "https://facebook.com/StrategicaPP")
+        self.assertEqual(profile_url("https://www.facebook.com/people/Kari-Hansen-AS/100063/"),
+                         "https://www.facebook.com/people/Kari-Hansen-AS/100063")
+        self.assertEqual(profile_url("https://www.facebook.com/profile.php?id=1234&sk=about"),
+                         "https://www.facebook.com/profile.php?id=1234")
+        for u in ("https://www.facebook.com/events/123/", "https://www.facebook.com/watch/?v=1",
+                  "https://www.facebook.com/photo.php?fbid=1"):
+            self.assertFalse(SOCIAL["facebook"].match(u), u)
+
+    def test_careers_links(self):
+        import re
+        from brierwise_signalpost.website import PAGE_HINTS
+        c = PAGE_HINTS["careers"]
+
+        def hit(path, text=""):
+            return bool(c.search(re.sub(r"[-_/.]+", " ", path)) or (len(text.split()) <= 5 and c.search(text)))
+        for path, text in (("/karriere/", ""), ("/jobb-hos-oss", ""), ("/ledige-stillinger", ""), ("/jobs/", ""),
+                           ("/om-oss/jobbe-i-x", ""), ("/x", "Ledige jobber"), ("/x", "Jobb hos oss")):
+            self.assertTrue(hit(path, text), path + " " + text)
+        # vacant premises, orders, a story about work, a news link whose long title says «jobber», production
+        for path, text in (("/vare-eiendommer/ledige-lokaler", "Ledige lokaler"), ("/kundebestillinger/", ""),
+                           ("/bestillinger", "Bestillinger"), ("/Home/psykiske_plager_p-_jobben.html", ""),
+                           ("/aktuelt/innovative-losninger", "Vi jobber med innovative løsninger til kompliserte "
+                                                             "utfordringer"), ("/fremstilling", ""),
+                           ("/ledige.html", "Ledige")):
+            self.assertFalse(hit(path, text), path + " " + text)
+
+    def test_site_values(self):
+        from brierwise_signalpost.site import value_text
+        self.assertEqual(value_text(True), "yes")
+        wp = {"organisation_number": "997699688", "name": "CONSTO AS AVD ASKER", "address": "Ertebakka 7, 1384 ASKER",
+              "municipality": "ASKER", "industry": {"code": "41.000", "label": "Oppføring av bygninger"},
+              "employees": 77, "website": "www.consto.no"}
+        self.assertEqual(value_text(wp), "CONSTO AS AVD ASKER (997699688) · Ertebakka 7, 1384 ASKER · Oppføring av "
+                                         "bygninger (41.000) · 77 employees · www.consto.no")
+        self.assertNotIn("{", value_text({"a": {"code": "1", "label": "L"}, "b": [True, 2]}))
+        self.assertEqual(value_text({"role": "Styrets leder", "role_code": "LEDE", "name": "A B"}),
+                         "Chair of the board (Styrets leder): A B")
+
+    def test_alternative_addresses(self):
+        from brierwise_signalpost.website import alternatives
+        mismatch = ("network: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: Hostname "
+                    "mismatch, certificate is not valid for 'www.02365.no'. (_ssl.c:1010)>")
+        self.assertEqual(alternatives("https://www.02365.no/", mismatch, False),
+                         [("https://02365.no/", "the certificate of www.02365.no is not valid for that name")])
+        self.assertEqual(alternatives("https://rg.no/", mismatch, True)[0][0], "https://www.rg.no/")
+        self.assertEqual(alternatives("https://www.strategica.no/", "refused: host is not public", True)[0][0],
+                         "https://strategica.no/")
+        # a guessed name that does not resolve gets no second lookup
+        self.assertEqual(alternatives("https://www.strategica.no/", "refused: host is not public", False), [])
+        refused = "network: <urlopen error [Errno 111] Connection refused>"
+        self.assertEqual(alternatives("https://www.kjus.as/", refused, True), [("http://www.kjus.as/",
+                                                                              "www.kjus.as refuses https connections")])
+        self.assertEqual(alternatives("https://www.kjus.as/", "network: <urlopen error [WinError 10061] No connection "
+                                      "could be made because the target machine actively refused it>", True)[0][0],
+                         "http://www.kjus.as/")
+        self.assertEqual(alternatives("http://www.kjus.as/", refused, True), [])
+        self.assertEqual(alternatives("https://www.kjus.as/", refused, False), [])
+        # never a way around a certificate that fails for another reason, and no retry after a timeout
+        expired = ("network: <urlopen error [SSL: CERTIFICATE_VERIFY_FAILED] certificate verify failed: certificate "
+                   "has expired (_ssl.c:1010)>")
+        self.assertEqual(alternatives("https://x.no/", expired, True), [])
+        self.assertEqual(alternatives("https://x.no/", "network: <urlopen error timed out>", True), [])
+
     def test_clip(self):
         from brierwise_signalpost.synthesis import clip
         self.assertEqual(clip("Kort  tekst.\n"), "Kort tekst.")
@@ -294,6 +396,20 @@ class Core(unittest.TestCase):
         self.assertTrue(placeholder(page))
         page = Page("https://y.no/")
         page.feed("<html><head><title>Snekker Hansen</title></head><body>Vi bygger hus.</body></html>")
+        self.assertFalse(placeholder(page))
+        # a registrar's parking page names the domain, which spells the company name
+        page = Page("http://www.kjus.as/")
+        page.feed("<html><head><title>www.kjus.as is parked</title></head><body><h1>www.kjus.as is parked</h1>"
+                  "<p>www.kjus.as is registered, but the owner currently does not have an active website here.</p>"
+                  "</body></html>")
+        self.assertTrue(placeholder(page))
+        page = Page("http://www.kjus.as/")
+        page.feed("<html><head><title>kjus.as</title></head><body>Eieren har for øyeblikket ikke en aktiv nettside "
+                  "her.</body></html>")
+        self.assertTrue(placeholder(page))
+        page = Page("https://p.no/")
+        page.feed("<html><head><title>P-hus Sentrum</title></head><body>Bilen din er parkert trygt hos oss.</body>"
+                  "</html>")
         self.assertFalse(placeholder(page))
 
     def test_refresh_first_observed_and_sliding_windows(self):

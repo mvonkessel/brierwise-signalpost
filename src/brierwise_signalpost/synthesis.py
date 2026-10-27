@@ -143,9 +143,7 @@ def synthesize(env) -> dict:
                     x, y = c["value"]["amount"], b["value"]["amount"]
                     year = period_end(prior)[:4]
                     if f == "revenue" and y > 0 and x >= 0:
-                        pct = round(100.0 * (x - y) / y)
-                        trend = "unchanged" if pct == 0 else ("up %d%%" % pct if pct > 0 else "down %d%%" % -pct)
-                        text += " (%s: %s, %s)" % (year, money(b["value"]), trend)
+                        text += " (%s: %s, %s)" % (year, money(b["value"]), trend(x, y))
                     else:
                         text += " (%s: %s)" % (year, money(b["value"]))
             bits.append(text)
@@ -233,6 +231,8 @@ def synthesize(env) -> dict:
             unknown.append(("official website", w[0]["availability"], w))
     # hiring and activity
     jobs, careers, total = av("job_posting"), first("careers_page"), first("job_postings_total")
+    # absence of ads only when the whole feed was read (otherwise the claim is failed, blocked or missing)
+    nav_checked = any(c["availability"] == "not_available" for c in by.get("job_postings", []))
     if jobs:
         latest = max((c["value"].get("published") or "") for c in jobs)
         n = total["value"] if total else len(jobs)
@@ -242,8 +242,10 @@ def synthesize(env) -> dict:
             (", in " + ", ".join(p.title() for p in places[:4]) + (" and more" if len(places) > 4 else ""))
             if places else ""), jobs + ([total] if total else []))
     elif careers:
-        say("hiring", "Its website has a careers page (%s); no active ad was found on Nav's official feed." %
-            careers["value"], [careers] + by.get("job_postings", []))
+        say("hiring", "Its website has a careers page (%s); %s." % (
+            careers["value"], "no active ad was found on Nav's official feed" if nav_checked else
+            "Nav's official feed was not read in full in this run, so its ads are unknown"),
+            [careers] + by.get("job_postings", []))
     else:
         j = by.get("job_postings", [])
         if j:
@@ -264,6 +266,9 @@ def synthesize(env) -> dict:
                 (period_end(pay)[:4], money(pay["value"])), e + [pay])
         elif e:
             unknown.append(("number of employees", e[0]["availability"], e))
+    # a parent company's own accounts say little about the business: the signals use its group accounts
+    signals(out, latest_accounts(env.claims, "konsern") or periods, value_of, emp, hist, jobs, total,
+            careers, nav_checked, acts, say)
     # unknowns
     labels = {"not_available": "not found in the checked sources", "blocked": "the source refused the request",
               "failed": "the source could not be read in this run", "ambiguous": "a candidate could not be tied to "
@@ -274,6 +279,68 @@ def synthesize(env) -> dict:
         say("unknown", "Unknown %s: %s%s." % (what, labels.get(state, state), "; " + note if note else ""), claims)
     return {"method": "deterministic templates over this envelope's claims; no language model",
             "sentences": out}
+
+
+def trend(new: float, old: float) -> str:
+    pct = round(100.0 * (new - old) / old)
+    return "unchanged" if pct == 0 else ("up %d%%" % pct if pct > 0 else "down %d%%" % -pct)
+
+
+def signals(out, periods, value_of, emp, hist, jobs, total, careers, nav_checked, acts, say) -> None:
+    """One line up front with what a job seeker, seller, partner or investor looks at first: direction of revenue,
+    operating result, equity against total assets (of the group when the company files group accounts), staff and its
+    trend, hiring and the latest own news. Only claims of this envelope; the shares are computed from the filed
+    figures and say so."""
+    sig, used, group = [], [], ""
+    if periods:
+        kind, p = periods[0]["value"].get("accounts_type"), periods[0]["reporting_period"]
+        year, group = period_end(periods[0])[:4], "group " if kind == "konsern" else ""
+        rv, op, eq, ta = (value_of(f, kind, p) for f in ("revenue", "operating_result", "equity", "total_assets"))
+        if rv:
+            text = "%srevenue %s in %s" % (group, money(rv["value"]), year)
+            b = value_of("revenue", kind, periods[1]["reporting_period"]) if len(periods) > 1 else None
+            if b and b["value"].get("currency") == rv["value"].get("currency") and b["value"]["amount"] > 0 and \
+                    rv["value"]["amount"] >= 0:
+                text += " (%s on %s)" % (trend(rv["value"]["amount"], b["value"]["amount"]), period_end(periods[1])[:4])
+                used.append(b)
+            sig.append(text)
+            used.append(rv)
+        if op:
+            x = op["value"]["amount"]
+            sig.append("%soperating %s of %s" % (group, "loss" if x < 0 else "profit",
+                                                 money(dict(op["value"], amount=abs(x))))
+                       if x else "%soperating result zero" % group)
+            used.append(op)
+        if eq and eq["value"]["amount"] < 0:
+            sig.append("negative %sequity" % group)
+            used.append(eq)
+        elif eq and ta and ta["value"]["amount"] > 0 and eq["value"].get("currency") == ta["value"].get("currency"):
+            sig.append("%sequity %d%% of total assets (computed from the filed figures)" %
+                       (group, round(100.0 * eq["value"]["amount"] / ta["value"]["amount"])))
+            used += [eq, ta]
+    if emp:
+        text = "%s employees%s" % (emp["value"], " in this entity" if group else "")
+        series = (hist or {}).get("value") or []
+        if len(series) >= 2 and series[0]["employees"]:
+            text += " (%s since %s)" % (trend(series[-1]["employees"], series[0]["employees"]), series[0]["date"])
+        sig.append(text)
+        used += [emp, hist]
+    if jobs:
+        n = total["value"] if total else len(jobs)
+        sig.append("hiring: %d active job ad%s on Nav" % (n, "s" if n > 1 else ""))
+        used += jobs[:3] + ([total] if total else [])
+    elif careers:
+        sig.append("careers page, no active job ad on Nav" if nav_checked else "careers page")
+        used.append(careers)
+    if acts:
+        sig.append("latest own news %s" % acts[0]["value"]["date"])
+        used.append(acts[0])
+    if len(sig) < 2:
+        return
+    say("signals", "Key signals: %s." % "; ".join(sig), used)
+    # up front, after the identity (and a register status that overrides everything else)
+    at = sum(1 for s in out if s["topic"] in ("identity", "status"))
+    out.insert(at, out.pop())
 
 
 FIELD_TEXT = {"legal_name": "legal name", "organisation_form": "legal form", "registry_status": "register status",

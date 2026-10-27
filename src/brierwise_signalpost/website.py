@@ -21,7 +21,8 @@ LEGAL_SUFFIX = re.compile(r"\b(AS|ASA|ANS|DA|SA|BA|NUF|ENK|IKS|KF|SF|STI|FLI|BRL
 SOCIAL = {
     "linkedin": re.compile(r"^https?://([a-z]{2,3}\.)?linkedin\.com/(company|school|showcase)/[^/?#]+", re.I),
     "facebook": re.compile(r"^https?://(www\.|m\.|nb-no\.)?facebook\.com/(?!sharer|share|dialog|plugins|tr\b|"
-                           r"login|policy|privacy|help|groups/?$)[^?#]{2,}", re.I),
+                           r"login|policy|privacy|help|groups/?$|events/|watch|photo|story\.php|permalink\.php|"
+                           r"hashtag/|reel/|stories/|marketplace)[^?#]{2,}", re.I),
     "instagram": re.compile(r"^https?://(www\.)?instagram\.com/(?!p/|explore|accounts|share)[^/?#]{2,}", re.I),
     "x": re.compile(r"^https?://(www\.)?(twitter|x)\.com/(?!intent|share|home|search|i/)[^/?#]{2,}", re.I),
     "youtube": re.compile(r"^https?://(www\.)?youtube\.com/(channel/|c/|user/|@)[^/?#]+", re.I),
@@ -30,7 +31,10 @@ SOCIAL = {
 PAGE_HINTS = {
     "contact": re.compile(r"(kontakt|contact|om-oss|om_oss|omoss|about|personvern|privacy|vilkar|vilk%C3%A5r|terms|"
                           r"impressum|selskapet|company)", re.I),
-    "careers": re.compile(r"(karriere|jobb|ledige|stillinger|careers?|\bjobs?\b|work-with-us)", re.I),
+    # whole words after «-», «_» and «/» became spaces: not «jobber» (works), «jobben» (the job, in a story),
+    # «bestillinger» (orders) or «ledige lokaler» (vacant premises)
+    "careers": re.compile(r"(karriere|career|\bjobbe?\b|\bjobs?\b|\bstillinger?\b|ledige jobb|jobbmulighet|vacanc|"
+                          r"work with us|join us)", re.I),
     "news": re.compile(r"(nyhet|aktuelt|\bnews\b|blogg|\bblog\b|presse|artikler|articles)", re.I),
 }
 GENERIC_MAIL = re.compile(r"^(post|postmottak|firmapost|info|kontakt|contact|salg|sales|office|kontor|mail|hello|"
@@ -83,7 +87,11 @@ def domain_is_name(host: str, legal_name: str) -> bool:
 
 # Placeholder pages: a parked, for-sale, unfinished or switched-off site says nothing about who runs it.
 PLACEHOLDER = re.compile(r"(domain (name )?(is|may be) for sale|buy this domain|domenet (er )?til salgs|kjop dette "
-                         r"domenet|parkert (hos|av)|parked (free|domain|by)|under construction|under oppbygging|"
+                         r"domenet|parkert (hos|av)|parked (free|domain|by)|[a-z0-9-]\.[a-z]{2,} (is parked|er parkert)\b|"
+                         r"(does not|doesn't) (currently )?have an active website|"
+                         r"(har (for oyeblikket )?ikke|ikke har) (en )?aktiv (nett|hjemme)side|"
+                         r"domain (name )?(is|has been) registered (at|with|by)|domenet (er )?registrert hos|"
+                         r"under construction|under oppbygging|"
                          r"nettsiden er (for oyeblikket |midlertidig )?utilgjengelig|site (is )?(temporarily )?"
                          r"unavailable|account (has been )?suspended|default web site page|welcome to nginx|"
                          r"it works!|index of /)")
@@ -477,6 +485,12 @@ def profile_url(url: str) -> str:
     if p.path.rstrip("/").endswith("profile.php"):
         q = "&".join(x for x in p.query.split("&") if x.startswith("id="))
         return urlunsplit((p.scheme, p.netloc, p.path, q, ""))
+    parts = [x for x in p.path.split("/") if x]
+    if (p.hostname or "").endswith("facebook.com") and parts:
+        # a page's tabs and the old «/pg/» form are the same account: «/pg/name/reviews» and «/name/about» are «/name»
+        parts = parts[1:] if parts[0] == "pg" and len(parts) > 1 else parts
+        keep = 3 if parts[0] in ("people", "pages") else 2 if parts[0] == "groups" else 1
+        return urlunsplit((p.scheme, p.netloc, "/" + "/".join(parts[:keep]), "", ""))
     return url.split("?")[0].split("#")[0].rstrip("/")
 
 
@@ -516,6 +530,27 @@ def other_entity(page: Page, legal_name: str) -> str | None:
 
 DNS_FAIL = re.compile(r"getaddrinfo|name or service not known|nodename nor servname|no address associated|"
                       r"name does not resolve|host is not public", re.I)
+CERT_NAME = re.compile(r"hostname mismatch|certificate is not valid for", re.I)
+HTTPS_REFUSED = re.compile(r"connection refused|actively refused|errno 111\b|winerror 10061", re.I)
+# Hosts the company gave itself (or that it verified before): worth a second address when the first one gives no answer.
+RETRY_ORIGINS = set(DECLARED) | {"email_domain", "previous_run"}
+
+
+def alternatives(url: str, error: str, declared: bool) -> list[tuple[str, str]]:
+    """Other addresses of the same site, with the reason, when `url` gave no answer: the same domain with or without
+    «www.» when the certificate is valid only for the other name or, for a host the company gave, the name does not
+    resolve; plain http when a host the company gave refuses connections on the https port. The register gives a host,
+    not a URL, and browsers try these too. Certificate checks are never relaxed."""
+    p = urlsplit(url)
+    host, error = p.hostname or "", error or ""
+    twin = urlunsplit((p.scheme, host[4:] if host.startswith("www.") else "www." + host, "/", "", ""))
+    if CERT_NAME.search(error):
+        return [(twin, "the certificate of %s is not valid for that name" % host)]
+    if declared and DNS_FAIL.search(error):
+        return [(twin, "%s does not resolve to a public address" % host)]
+    if declared and p.scheme == "https" and HTTPS_REFUSED.search(error):
+        return [(urlunsplit(("http", p.netloc, "/", "", "")), "%s refuses https connections" % host)]
+    return []
 
 
 LEADER_ROLES = {"DAGL": "daily manager", "LEDE": "chair of the board"}
@@ -666,12 +701,26 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         site = Site(client, env, url)
         site.deadline = deadline
         r, snap, why = site.get(url)
+        via, also, plain = "", "", False
+        if r is not None and r.status == 0 and not why:
+            for alt, because in alternatives(url, r.error, origin in RETRY_ORIGINS):
+                alt_site = Site(client, env, alt)
+                alt_site.deadline = deadline
+                r2, snap2, why2 = alt_site.get(alt)
+                if r2 is not None and r2.ok:
+                    via = "; read at %s because %s" % (alt, because)
+                    # a domain kept only over plain http is often a neglected or re-registered one: only the strong
+                    # proofs (organisation number, registered address, registered leader) publish it
+                    plain = alt.startswith("http://")
+                    site, r, snap, why, url = alt_site, r2, snap2, why2, alt
+                else:
+                    also = " (also tried %s)" % alt
         if r is None or not r.ok:
             state = fetch_state(r, why)
             is_prev = site_key(urlsplit(url).hostname) == prev_host and state in ("failed", "blocked")
             if origin == "registry_listed" or is_prev:
                 ev = [env.cite(snap, "HTTP %s %s" % (r.status, r.error))] if snap and r is not None else []
-                reason = why or (r.error or "HTTP %s" % r.status if r is not None else "page budget used up")
+                reason = (why or (r.error or "HTTP %s" % r.status if r is not None else "page budget used up")) + also
                 if origin == "registry_listed":
                     deferred = (state, ev, "registry-listed website did not answer: %s" % reason, 0.99)
                 else:
@@ -743,12 +792,12 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             proof, conf = "organisation number shown on the site next to other companies' numbers", 0.9
         elif kind == "address" and named and same_domain and origin != "name_short" and weak_ok:
             proof, conf = "the site names the company and shows its registered street address", 0.9
-        elif declared and origin != "subunit_listed" and same_domain and named_home and weak_ok:
+        elif declared and origin != "subunit_listed" and same_domain and named_home and weak_ok and not plain:
             proof, conf = DECLARED[origin] + "; site names the company", 0.85
-        elif origin == "registry_listed" and weak_ok and domain_is_name(final_host, name):
+        elif origin == "registry_listed" and weak_ok and not plain and domain_is_name(final_host, name):
             proof, conf = DECLARED[origin] + ("; the domain spells the company name" if same_domain else
                                               "; it forwards to %s, which spells the company name" % final_host), 0.8
-        elif origin == "email_domain" and same_domain and named_home and weak_ok:
+        elif origin == "email_domain" and same_domain and named_home and weak_ok and not plain:
             proof, conf = "the site names the company on its home page", 0.8
         elif lead:
             proof, conf = "the site names the company and its registered %s" % LEADER_ROLES[lead[0]], 0.85
@@ -759,7 +808,9 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             if origin == "registry_listed":
                 why_not = ("looks like a placeholder (parked, for sale or switched off)" if dummy else
                            "presents itself as «%s», another legal entity," % other if other else
-                           "redirects to %s" % final_host if not same_domain else "does not name the company")
+                           "redirects to %s" % final_host if not same_domain else
+                           "answers only over plain http, without the registered address or a registered leader,"
+                           if plain else "does not name the company")
                 deferred = ("ambiguous", [env.cite(snap, (page.title or "")[:160], "homepage")],
                             "%s, but the site %s and shows no organisation number" % (DECLARED[origin], why_not), 0.4)
             continue                                   # no proof: never published
@@ -772,7 +823,7 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         if origin == "registry_listed" and register_snap:
             ev.append(env.cite(register_snap, "hjemmeside: %s" % raw_hp, "hjemmeside"))
         env.claim("website_profiles", "official_website", r.final_url, ev, "available", confidence=conf,
-                  note=proof + ORIGIN_NOTE.get(origin, ""))
+                  note=proof + ORIGIN_NOTE.get(origin, "") + via)
         return {"status": "available", "site": site, "home": (r, snap, page), "origin": origin}
     if prev_failed and not (deferred and deferred[0] in ("failed", "blocked")):
         deferred = prev_failed                        # absence is not established while that site cannot be read
@@ -871,8 +922,13 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
     for kind in ("careers", "news"):
         for link, text in page.links:
             lp = urlsplit(link)
-            if site_key(lp.hostname) == host and PAGE_HINTS[kind].search(lp.path + " " + text) and lp.path not in ("",
-                                                                                                                   "/"):
+            if kind == "careers":
+                # the word in the link's path, or in a short navigation text (a story's title may say «jobb» too)
+                hit = PAGE_HINTS[kind].search(re.sub(r"[-_/.]+", " ", lp.path)) or (
+                    len(text.split()) <= 5 and PAGE_HINTS[kind].search(text))
+            else:
+                hit = PAGE_HINTS[kind].search(lp.path + " " + text)
+            if site_key(lp.hostname) == host and hit and lp.path not in ("", "/"):
                 url = urlunsplit((lp.scheme, lp.netloc, lp.path, "", ""))
                 rr, ss, why = site.get(url)
                 if rr is None or not rr.ok:
