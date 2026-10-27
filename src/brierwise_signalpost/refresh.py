@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 from .official import ACCOUNT_FIELDS as _ACCOUNTS
+from .website import profile_url
 
 # field -> how to identify one fact inside a multi-valued field (None: single-valued field)
 MATERIAL = {
@@ -58,6 +59,10 @@ def _facts(env: dict) -> dict:
         if c.get("availability") != "available":
             continue
         f, v = c["field"], c["value"]
+        if f == "company_profile" and isinstance(v, dict) and v.get("url"):
+            # compared in canonical form, so an address an older version wrote differently is the same account
+            v = dict(v, url=profile_url(v["url"]))
+            c = dict(c, value=v)
         if f in ACCOUNT_FIELDS:
             key = (f, (v or {}).get("accounts_type"), c.get("reporting_period"))
         elif f in MATERIAL:
