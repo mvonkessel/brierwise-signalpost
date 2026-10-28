@@ -47,9 +47,9 @@ not a change of the company is not reported as one:
 
 Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
-## Smoke test (27 October 2026)
+## Smoke test (28 October 2026)
 
-`smoke-test/` holds the 100-company smoke test of this code (version 0.7.1). The batch (`smoke-test/batch.jsonl`) is
+`smoke-test/` holds the 100-company smoke test of this code (version 0.8.0). The batch (`smoke-test/batch.jsonl`) is
 the starter kit's standard draw, `select_entry_batch.py` with its default seed: `random.Random(20260823).sample` of 100
 rows of the public universe in file order (rebuilt in a few lines; the kit's code itself was not run). Both runs
 started from a fresh clone in an empty virtual environment without pip:
@@ -60,16 +60,17 @@ PYTHONPATH=src python -m brierwise_signalpost run --organisations smoke-test/bat
 # the same command again, with --report smoke-test/run-2-refresh-report.json
 ```
 
-- First run (`run-1-report.json`): 100 of 100 envelopes, all completed, in 395 s (the Nav index: all 9,348 readable
-  active ads), 5.2 s per company at the median and 12.8 s at p95, 10,758 requests, no third-party cost, 6,870 claims.
-  Identity, accounts, leadership and hiring are available for all 100. Website: 9 verified, 3 `ambiguous` (one
-  redirects to another firm's site, one answers only over plain http without the registered address, leader or
-  number, one does not name the company), 1 `failed` (self-signed certificate), 87 `not_available`. Two companies
-  link their own profiles (5), four publish dated posts (20); none has an active Nav ad. 98 of 100 summaries carry a
-  line of key signals.
+- First run (`run-1-report.json`): 100 of 100 envelopes, all completed, in 812 s (the Nav index: all 9,508 readable
+  active ads; Nav answered more slowly than the day before, when the same run took 395 s), 5.1 s per company at the
+  median and 13.6 s at p95, 11,135 requests, no third-party cost, 6,858 claims. Identity, accounts, leadership and
+  hiring are available for all 100. Website: 7 verified, 3 `ambiguous` (one redirects to another firm's site, one
+  answers only over plain http without the registered address, leader or number, one does not name the company),
+  1 `failed` (self-signed certificate), 89 `not_available`. Two companies link their own profiles (5), two publish
+  dated posts (13); none has an active Nav ad. 98 of 100 summaries carry a line of key signals. Version 0.7.1 had
+  published two more websites on this batch, both housing managers' sites, and their news (see «Evaluation»).
 - Refresh (`run-2-refresh-report.json`), the same command right afterwards: the first run's envelopes are kept under
   `smoke-test/snapshots/`, all 100 companies were matched with them, 0 material changes, nothing carried forward or
-  first observed; 399 s, 10,737 requests. `smoke-test/envelopes.jsonl` is this run's output.
+  first observed; 451 s, 10,964 requests. `smoke-test/envelopes.jsonl` is this run's output.
 - The static site of the refresh run is in `docs/` and served at https://mvonkessel.github.io/brierwise-signalpost/
   (search, filters, sorting, comparison, evidence links; desktop and mobile).
 
@@ -297,8 +298,15 @@ scale sample (the 80 sites without the organisation number on them reviewed by t
 register data) found two sites of another legal entity, both candidates from the registered e-mail domain and both proved by
 name and registered address: an accounting firm's site for a client registered at the firm's office with the firm's
 mail domain (the client's only name word, «tur», was found inside other words), and a housing manager's site for a
-housing co-operative it manages. Neither ever left this machine. With the rules in «Identity gates» above, a rerun of
-the same 145 companies publishes neither, and three sites whose owner is uncertain also stay unpublished (a group's
+housing co-operative it manages. An earlier 100-company random sample (seed 20261099) had a third case of the same
+kind: a building firm's site, found through the mail domain it shares with a related project company and naming that
+company on its home page. These outputs stayed local, but version 1 of this entry (0.7.1) has the same rules, and its published smoke test
+contained two matches of the same kind: housing managers' sites (a regional housing association's site and the
+local site of another) for a housing co-operative and a housing foundation they manage, both found through the
+registered e-mail domain, with the managers' news items as the companies' dated activity. The smoke test of this
+version (above) no longer has them. With
+the rules in «Identity gates» above, a rerun of the same 145 companies publishes neither of the two, the third case is
+rejected too, and three sites whose owner is uncertain also stay unpublished (a group's
 brand site, a car dealer under another name, a site shared by two shops that shows both organisation numbers), while
 the whole-name-as-one-word rule keeps a site that writes the name as one word. Builderr's 100-company sample keeps all
 75 websites. Two other companies of the rerun lost their site only for the run (one answered HTTP 429 to the repeated
