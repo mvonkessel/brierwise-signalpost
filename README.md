@@ -43,13 +43,16 @@ not a change of the company is not reported as one:
 - dated items that leave a sliding window (register events older than 13 months, a site's older posts, older
   accounts years) move to `history`, not to the changes; register update times are compared as UTC dates, because
   the register gives the same update sometimes in local time and sometimes in UTC;
-- between two agent versions only the value fields both versions write are compared.
+- between two agent versions only the value fields both versions write are compared, and website facts that appear
+  or disappear only because a newer version publishes a register site as «identity not verified» (or no longer
+  takes such a site's content) are counted under `refresh.first_observed` or kept in `history`, not reported as
+  changes.
 
 Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
 ## Smoke test (28 October 2026)
 
-`smoke-test/` holds the 100-company smoke test of this code (version 0.8.0). The batch (`smoke-test/batch.jsonl`) is
+`smoke-test/` holds the 100-company smoke test of this code (version 0.8.1). The batch (`smoke-test/batch.jsonl`) is
 the starter kit's standard draw, `select_entry_batch.py` with its default seed: `random.Random(20260823).sample` of 100
 rows of the public universe in file order (rebuilt in a few lines; the kit's code itself was not run). Both runs
 started from a fresh clone in an empty virtual environment without pip:
@@ -60,17 +63,19 @@ PYTHONPATH=src python -m brierwise_signalpost run --organisations smoke-test/bat
 # the same command again, with --report smoke-test/run-2-refresh-report.json
 ```
 
-- First run (`run-1-report.json`): 100 of 100 envelopes, all completed, in 812 s (the Nav index: all 9,508 readable
-  active ads; Nav answered more slowly than the day before, when the same run took 395 s), 5.1 s per company at the
-  median and 13.6 s at p95, 11,135 requests, no third-party cost, 6,858 claims. Identity, accounts, leadership and
-  hiring are available for all 100. Website: 7 verified, 3 `ambiguous` (one redirects to another firm's site, one
-  answers only over plain http without the registered address, leader or number, one does not name the company),
-  1 `failed` (self-signed certificate), 89 `not_available`. Two companies link their own profiles (5), two publish
-  dated posts (13); none has an active Nav ad. 98 of 100 summaries carry a line of key signals. Version 0.7.1 had
-  published two more websites on this batch, both housing managers' sites, and their news (see «Evaluation»).
+- First run (`run-1-report.json`): 100 of 100 envelopes, all completed, in 721 s (set by the Nav index: 9,510 of
+  9,696 listed active ads read, one unreadable), 5.2 s per company at the median and 13.2 s at p95, 11,056 requests,
+  no third-party cost, 6,858 claims. Identity, accounts, leadership and hiring are available for all 100. Website:
+  7 verified, 1 given in the register without proof of identity (a store operator that lists its chain's site; the
+  site's content is not taken for the company), 2 `ambiguous` (one redirects to another firm's site, one answers only
+  over plain http without the registered address, leader or number), 1 `failed` (self-signed certificate),
+  89 `not_available`. Two companies link their own profiles (5), two publish dated posts (13); none has an active
+  Nav ad. 98 of 100 summaries carry a line of key signals. Version 0.7.1 had published two more websites on this
+  batch, both housing managers' sites, and their news (see «Evaluation»); version 0.8.0 reported the store
+  operator's register site as `ambiguous`.
 - Refresh (`run-2-refresh-report.json`), the same command right afterwards: the first run's envelopes are kept under
   `smoke-test/snapshots/`, all 100 companies were matched with them, 0 material changes, nothing carried forward or
-  first observed; 451 s, 10,964 requests. `smoke-test/envelopes.jsonl` is this run's output.
+  first observed; 402 s, 10,974 requests. `smoke-test/envelopes.jsonl` is this run's output.
 - The static site of the refresh run is in `docs/` and served at https://mvonkessel.github.io/brierwise-signalpost/
   (search, filters, sorting, comparison, evidence links; desktop and mobile).
 
@@ -94,7 +99,7 @@ file. The evaluation below also uses Builderr's public 100-company sample, which
 | Dated register events, monthly employee counts | Enhetsregisteret update stream (`oppdateringer/enheter` with JSON patches, last 13 months) | NLOD 2.0 | anchor; contact fields in the patches are ignored |
 | Annual accounts | Brønnøysund Regnskapsregisteret API (`regnskap/{orgnr}`: the filed accounts of the last three years, company and group) | NLOD 2.0 | anchor; every figure is copied as filed, with its currency (some groups file in USD or EUR), period and filing id; nothing is computed into a claim |
 | Job ads | Nav job vacancy feed (pam-stilling-feed, public token fetched at run time): every ad active in the changes of the last 200 days is read in full once per run, in a background thread | Nav API terms: free use and republication, inactive ads removed | employer organisation number equals the company or one of its registered subunits (matched by number only, never by name) |
-| Website, own profiles, careers, dated items | the company's own website (pages, JSON-LD, RSS/Atom, WordPress posts API, news listings), robots.txt respected | company-owned | see "Identity gates" below; otherwise unpublished, a failing register entry is `ambiguous` |
+| Website, own profiles, careers, dated items | the company's own website (pages, JSON-LD, RSS/Atom, WordPress posts API, news listings), robots.txt respected | company-owned | see "Identity gates" below; a register site without proof of identity is published as the register's website, marked «identity not verified», without its content; otherwise unpublished |
 
 ### Identity gates for a website
 
@@ -124,8 +129,9 @@ looked for on the home page and up to three contact or about pages of the same s
    entity that the page prints with its legal form (a sister company's site at the same address) (0.85). This is the «legal name plus
    leadership» combination named in the challenge's playbook; the quoted span shows the name as the site prints it.
 
-Gates 2 to 6 never accept a placeholder page (parked, for sale, under construction, switched off, or a registrar's
-parking page that names the domain), a site that calls itself by another legal entity's name, or a sole
+Gates 2 to 6 never accept a placeholder page (parked, for sale, under construction, switched off, a registrar's
+parking page that names the domain, a short «coming soon» page such as «Her kommer: www.example.no», or a short page
+that shows nothing but its own address), a site that calls itself by another legal entity's name, or a sole
 proprietorship (which needs its organisation number on the site).
 
 «Names the company» means that the first three words of the legal name without its legal form appear on the checked
@@ -140,6 +146,18 @@ they also need:
   the office of their accountant or manager, whose site may mention the client and shows that office;
 - for housing co-operatives and co-ownerships (borettslag, eierseksjonssameie, tingsrettslig sameie), a site they
   declared themselves; their registered address and e-mail are mostly their manager's.
+
+Register sites without proof of identity (since version 0.8.1). A website the company lists in the register that
+answers on its own domain but passes none of the gates (it does not name the company, or it presents itself as another
+legal entity: mostly a housing manager's, a parent's or an umbrella body's site) is published as the website the
+register gives, with confidence 0.6 and a note that says «identity not verified», the way Builderr's own crawler lists
+such sites («registry-linked site, identity not verified»). Its description, title, brand, e-mail, profiles, careers
+page and news are not taken for the company; the company page shows the site as given in the register, and the list,
+filters and comparison count only verified websites. The same holds for the register site of a housing co-operative
+or co-ownership that passes a gate without presenting itself as the co-operative (its name only in a list on the
+manager's site, the manager's office as its registered address), and for a register site whose only proof is the
+company's number among other bodies' numbers without presenting itself as the company. A placeholder, a redirect to
+another domain or a plain-http-only answer stays `ambiguous`.
 
 The register gives a host, not a URL. When a host the company gave (register, own Nav ad, workplace, the domain of
 its registered e-mail address, or the site verified in the previous run) does not resolve, the same domain with or
@@ -312,6 +330,38 @@ the whole-name-as-one-word rule keeps a site that writes the name as one word. B
 75 websites. Two other companies of the rerun lost their site only for the run (one answered HTTP 429 to the repeated
 checks, one refused the connection). X profiles are written as `https://x.com/<account>`; a refresh against an
 earlier run that wrote twitter.com reports no change.
+
+Version 0.8.1 (28 October 2026). A review of a fresh 1,000-company random sample (seed 20261042) run with 0.8.0 found,
+among the 155 websites it published (66 with the organisation number on the site; the other 89, and every site whose
+domain another company lists in the register, checked by title, quoted proof and register data), no site of another
+legal entity except one that the company lists in the register itself (the first point below). It found three faults:
+
+- a housing co-operative's register site was its manager's (a regional housing association): the site names the
+  co-operative in a list and shows the manager's office, which is the co-operative's registered address, so 0.8.0
+  published the manager's description, e-mail and five news items as the co-operative's own. In the public universe
+  6,390 housing co-operatives and co-ownerships list a website that other companies list too, mostly their managers'.
+  In a sample of one co-operative or co-ownership for each of these 111 shared domains, plus 40 foundations with
+  shared domains, 0.8.0 published two housing managers' sites with their news (73 and 12 co-operatives and
+  co-ownerships list those two sites in the register) and an umbrella organisation's site with its content for a
+  regional foundation whose number it lists among others;
+- a «coming soon» page («Her kommer: www.phaseenergy.no») passed as a site that names the company, because its only
+  text is the domain, which spells the name;
+- 29 of the 124 register sites in the sample were reported as `ambiguous` (21 do not name the company, 3 present
+  themselves as another legal entity, 4 redirect to another domain, 1 is parked), while Builderr's own crawler lists
+  register sites as registry-linked websites and attributes their content only where it verifies the identity.
+
+With the rules above («Register sites without proof of identity», placeholders), a rerun of the 209 companies of the
+sample that have a register site or a published website publishes 25 register sites as «identity not verified»
+(housing managers', parents', umbrella bodies' and a municipality's sites, and the manager's site of the co-operative
+above, now without its content), no longer the «coming soon» page, and otherwise the same verified websites, except
+one slow site that both versions verify in some runs and not in others. In the housing and foundation sample, 83
+register sites are published as «identity not verified» (three of them, the two housing
+managers' and the umbrella organisation's, without the content 0.8.0 had taken) and 13 verified sites stay as they
+were. The 145 companies of version 0.8.0's review set give 138 verified websites, as with 0.8.0 (four sites were
+verified in only one of the two runs; the two that 0.8.1 missed were verified when run again). Builderr's
+100-company sample: 80 websites instead of 75; the five new ones are all in Builderr's own set as registry-linked
+sites, three of them marked «identity not verified» there as well (for the other two Builderr verified the identity,
+which this agent could not: one site shows non-browsers only a verification page).
 
 The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
 October 2026; 20 parallel reads, at most 50 per second).
