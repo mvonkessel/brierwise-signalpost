@@ -215,7 +215,8 @@ def synthesize(env) -> dict:
     # online presence
     site, profs, brand = first("official_website"), av("company_profile"), first("public_brand")
     if site:
-        text = "Official website: %s (%s)." % (site["value"], site.get("note") or "verified")
+        text = "%s: %s (%s)." % ("Website given in the register" if "identity not verified" in (site.get("note") or "")
+                                 else "Official website", site["value"], site.get("note") or "verified")
         if brand:
             text += " The site presents the company as «%s»." % brand["value"]
         if profs:

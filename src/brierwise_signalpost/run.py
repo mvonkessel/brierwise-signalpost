@@ -118,7 +118,7 @@ def research(client: Client, orgnr: str, run_id: str, nav: NavIndex | None = Non
                 extra = [(u, "nav_employer_homepage") for u, _ in hired["homepages"]]
                 found = find_website(cc, env, off["entity"], extra=extra, subunits=off["subunits"],
                                      previous_site=prev_site)
-                if found.get("status") == "available":
+                if found.get("status") == "available" and not found.get("unverified"):
                     extract_site(cc, env, found)
     except Exception as exc:                       # one broken company must not break the batch
         status = "failed"

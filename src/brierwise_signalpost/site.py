@@ -76,7 +76,9 @@ def latest_revenue(claims: list, kind: str | None = None) -> dict | None:
 def summary(env: dict) -> dict:
     by = {}
     for c in env.get("claims", []):
-        if c["availability"] == "available":
+        # a register site whose identity is not verified is shown on the company page, not as a verified website
+        if c["availability"] == "available" and not (c["field"] == "official_website" and
+                                                    "identity not verified" in (c.get("note") or "")):
             by.setdefault(c["field"], []).append(c["value"])
     first = lambda f: (by.get(f) or [None])[0]
     form = first("organisation_form") or {}

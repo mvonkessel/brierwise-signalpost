@@ -411,6 +411,26 @@ class Core(unittest.TestCase):
         page.feed("<html><head><title>P-hus Sentrum</title></head><body>Bilen din er parkert trygt hos oss.</body>"
                   "</html>")
         self.assertFalse(placeholder(page))
+        # a host's «coming soon» page shows only the domain, which spells the company name
+        page = Page("https://phaseenergy.no/")
+        page.feed("<html><head><title>www.phaseenergy.no</title></head><body>Her kommer: www.phaseenergy.no</body>"
+                  "</html>")
+        self.assertTrue(placeholder(page))
+        page = Page("https://q.no/")
+        page.feed("<html><head><title>q-energi.no</title></head><body><h1>q-energi.no</h1></body></html>")
+        self.assertTrue(placeholder(page))
+        # a real site that announces something «kommer snart», or a script-built page with a name in its title
+        page = Page("https://r.no/")
+        page.feed("<html><head><title>Rørlegger Hansen</title></head><body>" + "Vi leverer rør og bad. " * 30 +
+                  "Ny nettbutikk kommer snart.</body></html>")
+        self.assertFalse(placeholder(page))
+        page = Page("https://s.no/")
+        page.feed("<html><head><title>Solberg Bygg AS</title></head><body><div id=root></div></body></html>")
+        self.assertFalse(placeholder(page))
+        page = Page("https://www.stavangerbudogvare.no/")
+        page.feed("<html><head><title></title><script src=app.js></script></head><body><div id=app></div></body>"
+                  "</html>")
+        self.assertFalse(placeholder(page))
 
     def test_refresh_first_observed_and_sliding_windows(self):
         rev = claim("revenue", {"amount": 5.0, "currency": "NOK", "accounts_type": "selskap"}, section="annual_accounts",
@@ -586,6 +606,86 @@ class Core(unittest.TestCase):
         own.feed("<html><head><title>Aktiv Fysioterapi Nittedal | Din fysioterapeut i Nittedal</title></head>"
                  "<body>x</body></html>")
         self.assertTrue(presents_company(own, "AKTIV FYSIOTERAPI NITTEDAL AS"))
+
+    def test_register_sites_without_proof_of_identity(self):
+        from brierwise_signalpost.http import Response
+        from brierwise_signalpost.website import find_website
+
+        class FakeClient:
+            """Pages by URL; robots.txt is missing everywhere, and any other host does not resolve."""
+            def __init__(self, pages):
+                self.pages = pages
+
+            def get(self, url, **kw):
+                if url.endswith("/robots.txt"):
+                    host = url.split("/")[2]
+                    known = any(u.split("/")[2] == host for u in self.pages)
+                    return Response(url, url, 404 if known else 0, error="" if known else "getaddrinfo failed")
+                if url in self.pages:
+                    return Response(url, url, 200, {"content-type": "text/html; charset=utf-8"},
+                                    self.pages[url].encode("utf-8"))
+                return Response(url, url, 0, error="getaddrinfo failed")
+
+        def search(name, form, homepage, pages, street="Hvervenmoveien 49", postcode="3511"):
+            env = Envelope("954079996", {})
+            entity = {"navn": name, "organisasjonsform": {"kode": form}, "hjemmeside": homepage,
+                      "forretningsadresse": {"adresse": [street], "postnummer": postcode, "poststed": "HØNEFOSS"}}
+            found = find_website(FakeClient(pages), env, entity, seconds=30)
+            return found, next(c for c in env.claims if c["field"] == "official_website")
+
+        # a housing co-operative's register site is its manager's: it names the co-operative in a list and shows the
+        # manager's office as the co-operative's address, but presents itself as the manager
+        manager = ("<html><head><title>Hjem</title></head><body>Ringbo. Boligbyggelaget i Ringerike. Våre borettslag: "
+                   "Kirkegt 11 Borettslag, Baglertun Borettslag. Hvervenmoveien 49, 3511 Hønefoss</body></html>")
+        found, c = search("KIRKEGT 11 BORETTSLAG", "BRL", "ringbo.no", {"https://ringbo.no/": manager,
+                                                                       "https://ringbo.no/kontakt": manager})
+        self.assertEqual((found["status"], found.get("unverified")), ("available", True))
+        self.assertEqual(c["value"], "https://ringbo.no/")
+        self.assertIn("identity not verified", c["note"])
+        # the same proofs for a company that is not run from someone else's office publish the site as its own
+        found, c = search("RINGBO AS", "AS", "ringbo.no", {"https://ringbo.no/": manager.replace("Ringbo.", "Ringbo AS."),
+                                                           "https://ringbo.no/kontakt": manager})
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+        self.assertNotIn("identity not verified", c["note"])
+        # a company's register site that does not name it (its parent's): the register's website, not verified
+        parent = "<html><head><title>Hovedside - Frost Eiendom</title></head><body>Vi utvikler boliger.</body></html>"
+        found, c = search("VESTRE LUNDÅSEN AS", "AS", "www.frost.no", {"https://www.frost.no/": parent,
+                                                                       "https://www.frost.no/kontakt": parent})
+        self.assertEqual((found["status"], found.get("unverified")), ("available", True))
+        self.assertIn("does not name the company", c["note"])
+        # a parked register site stays ambiguous
+        parked = ("<html><head><title>www.legevisitten.no is parked</title></head><body>www.legevisitten.no is "
+                  "parked</body></html>")
+        found, c = search("STAFBERGER CONSULTING AS", "AS", "www.legevisitten.no",
+                          {"https://www.legevisitten.no/": parked})
+        self.assertEqual((found["status"], c["availability"], c["value"]), ("ambiguous", "ambiguous", None))
+
+    def test_refresh_across_the_unverified_register_site_rule(self):
+        site = lambda note, **kw: claim("official_website", "https://www.ringbo.no/", section="website_profiles",
+                                        note=note, **kw)
+        news = claim("dated_activity", {"date": "2026-07-14", "title": "Nye leiligheter"}, section="hiring_activity")
+        profile = claim("company_profile", {"platform": "facebook", "url": "https://www.facebook.com/ringbo"},
+                        section="website_profiles")
+        unverified = "listed by the company in the register; identity not verified: the site does not present itself"
+        # 0.8.0 took the manager's site for the co-operative's own, with its profile and news; 0.8.1 publishes the
+        # register site without them: no change of the company, the old facts go to history
+        a = env_with([site("the site names the company and shows its registered street address"), news, profile])
+        b = env_with([site(unverified, confidence=0.6)])
+        a["run"]["agent_version"], b["run"]["agent_version"] = "0.8.0", "0.8.1"
+        changes, history = compare(a, b)
+        self.assertEqual(changes, [])
+        self.assertEqual(sorted(h["claim"]["field"] for h in history), ["company_profile", "dated_activity"])
+        # 0.8.0 reported the register site as ambiguous; 0.8.1 publishes it: first observed, not added
+        a = env_with([dict(site("listed by the company in the register, but the site does not name the company",
+                                availability="ambiguous"), value=None)])
+        observed = []
+        self.assertEqual(compare(a, b, observed=observed), ([], []))
+        self.assertEqual([o["field"] for o in observed], ["official_website"])
+        # within one version, the same site turning from unverified to verified is a change
+        a, c = env_with([site(unverified, confidence=0.6)]), env_with([site("organisation number shown on the site"),
+                                                                       profile])
+        a["run"]["agent_version"] = c["run"]["agent_version"] = "0.8.1"
+        self.assertEqual([x["change"] for x in compare(a, c)[0]], ["added"])
 
 
 if __name__ == "__main__":
