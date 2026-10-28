@@ -118,10 +118,25 @@ PLACEHOLDER = re.compile(r"(domain (name )?(is|may be) for sale|buy this domain|
                          r"nettsiden er (for oyeblikket |midlertidig )?utilgjengelig|site (is )?(temporarily )?"
                          r"unavailable|account (has been )?suspended|default web site page|welcome to nginx|"
                          r"it works!|index of /)")
+# A «coming soon» page («Her kommer: www.phaseenergy.no») counts only when the page is short: a real site may announce
+# that something «kommer snart».
+SOON = re.compile(r"(her kommer|kommer snart|coming soon|launching soon|lanseres snart|apner snart|snart klar|"
+                  r"ny(e)? (nett|hjemme)side(r)? (kommer|er pa vei)|vi jobber med (en )?ny(e)? (nett|hjemme)side|"
+                  r"maintenance mode)")
+DOMAIN_WORD = re.compile(r"(https?://)?(www\.)?[a-z0-9-]+(\.[a-z0-9-]+)*\.[a-z]{2,}(/\S*)?")
 
 
 def placeholder(page) -> bool:
-    return bool(PLACEHOLDER.search(fold(page.title + " " + page.text[:3000])))
+    folded = fold(page.title + " " + page.text[:3000])
+    if PLACEHOLDER.search(folded):
+        return True
+    body = " ".join(fold(page.text).split())
+    if len(body) < 400 and SOON.search(folded):
+        return True
+    # a page that shows nothing but its own address names no one: the domain spelling a name is no proof (an empty
+    # page, mostly one built by scripts, is not a placeholder)
+    return 0 < len(body) < 200 and bool(DOMAIN_WORD.search(body)) and \
+        not re.search(r"[a-z]{3,}", DOMAIN_WORD.sub(" ", folded))
 
 
 GENERIC_WORDS = {"holding", "holdings", "invest", "investering", "investment", "investments", "eiendom", "eiendommer",
@@ -413,6 +428,11 @@ ORIGIN_NOTE = {"name_full": "; found by a domain check of the legal name",
                "email_domain": "; candidate from the domain of the company's registered e-mail address",
                "search_candidate": "; candidate from a web search, verified on the site itself",
                "previous_run": "; the site verified in the previous run, checked again"}
+# A site the company lists in the register that does not show it is the company's own: published as the website the
+# register gives, as Builderr's own crawler does («registry-linked site, identity not verified»), but its texts,
+# profiles and news are not taken for the company (Ringbo's news are not a housing co-operative's own).
+UNVERIFIED = ("listed by the company in the register; identity not verified: the site %s, so it may be run by a "
+              "manager, parent or umbrella body, and its texts, profiles and news are not attributed to this company")
 # Mail and internet providers: the domain of a registered address there says nothing about the company's own site.
 FREE_MAIL = {"gmail.com", "googlemail.com", "hotmail.com", "hotmail.no", "outlook.com", "outlook.no", "live.no",
              "live.com", "msn.com", "yahoo.com", "yahoo.no", "ymail.com", "icloud.com", "me.com", "mac.com", "aol.com",
@@ -678,7 +698,11 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
       shortened-name guesses or workplace sites, and not when a page shows other companies' organisation numbers).
     The address, leader and mail-domain proofs are not used for housing co-operatives and co-ownerships unless they
     declared the site, and a mail-domain site must present itself as the company (`presents_company`).
-    Anything else stays unpublished; a register entry that fails these tests is reported as «ambiguous»."""
+    Anything else stays unpublished. A register site that answers on its own domain but fails these tests (or passes
+    them without presenting itself as the company, for a housing co-operative or co-ownership or through other
+    bodies' numbers next to its own) is published as the website the register gives, marked «identity not verified»
+    and without its texts, profiles and news; a placeholder, a redirect to another domain or a plain-http-only answer
+    is reported as «ambiguous»."""
     deadline = time.monotonic() + seconds
     name = entity.get("navn") or ""
     pat = orgnr_patterns(env.orgnr)
@@ -728,6 +752,7 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
     leaders = leaders_of(env)
     deferred = None                                   # the register's own site when it failed the tests
     prev_failed = None                                # the previous run's site when it could not be read now
+    unverified = None                                 # the register's site, readable but not shown to be the company's
     for url, origin in candidates:
         if time.monotonic() > deadline:
             env.error("website", "time budget for the website search used up")
@@ -848,15 +873,25 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             kind, span, proof_snap = "leader", lead[1], lead[2]
         else:
             proof = None
+        if proof is not None and kind != "orgnr" and origin == "registry_listed" and \
+                (form in HOUSING_FORMS or kind == "orgnr_shared") and \
+                not domain_is_name(final_host, name) and not presents_company(page, name):
+            # a co-operative's register site that names it only somewhere and shows its manager's office as its
+            # address (ringbo.no, notodden.bbl.no), or a site that lists several bodies' numbers without presenting
+            # itself as this one (an umbrella organisation's): the site is not shown to be this company's own
+            unverified = unverified or (r.final_url, snap, page, "does not present itself as the company")
+            continue
         if proof is None:
             if origin == "registry_listed":
-                why_not = ("looks like a placeholder (parked, for sale or switched off)" if dummy else
+                why_not = ("looks like a placeholder (parked, for sale, coming soon or switched off)" if dummy else
                            "presents itself as «%s», another legal entity," % other if other else
                            "redirects to %s" % final_host if not same_domain else
                            "answers only over plain http, without the registered address or a registered leader,"
                            if plain else "does not name the company")
                 deferred = ("ambiguous", [env.cite(snap, (page.title or "")[:160], "homepage")],
                             "%s, but the site %s and shows no organisation number" % (DECLARED[origin], why_not), 0.4)
+                if not dummy and same_domain and not plain:
+                    unverified = unverified or (r.final_url, snap, page, why_not.rstrip(","))
             continue                                   # no proof: never published
         ev = [env.cite(snap, (page.title or "")[:160], "homepage")]
         if proof_snap is not None and span:
@@ -869,6 +904,14 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
         env.claim("website_profiles", "official_website", r.final_url, ev, "available", confidence=conf,
                   note=proof + ORIGIN_NOTE.get(origin, "") + via)
         return {"status": "available", "site": site, "home": (r, snap, page), "origin": origin}
+    if unverified and not prev_failed:
+        url_u, snap_u, page_u, why_u = unverified
+        ev = [env.cite(snap_u, (page_u.title or "")[:160], "homepage")]
+        if register_snap:
+            ev.append(env.cite(register_snap, "hjemmeside: %s" % raw_hp, "hjemmeside"))
+        env.claim("website_profiles", "official_website", url_u, ev, "available", confidence=0.6,
+                  note=UNVERIFIED % why_u)
+        return {"status": "available", "unverified": True, "origin": "registry_listed"}
     if prev_failed and not (deferred and deferred[0] in ("failed", "blocked")):
         deferred = prev_failed                        # absence is not established while that site cannot be read
     if deferred:

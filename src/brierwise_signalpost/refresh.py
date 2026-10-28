@@ -53,6 +53,14 @@ def _failed_sources(env: dict) -> set:
     return {c["field"] for c in env.get("claims", []) if c.get("availability") in ("failed", "blocked")}
 
 
+def _site_state(env: dict) -> str | None:
+    """State of the website claim; a register site published without proof of identity counts as «unverified»."""
+    w = next((c for c in env.get("claims", []) if c.get("field") == "official_website"), None)
+    if w is None or w.get("availability") != "available":
+        return w.get("availability") if w else None
+    return "unverified" if "identity not verified" in (w.get("note") or "") else "verified"
+
+
 def _facts(env: dict) -> dict:
     out = {}
     for c in env.get("claims", []):
@@ -86,6 +94,12 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None, observed:
     same_version = (prev.get("run") or {}).get("agent_version") == (cur.get("run") or {}).get("agent_version")
     failed, prev_failed = _failed_sources(cur), _failed_sources(prev)
     prev_fields = {c.get("field") for c in prev.get("claims", [])}
+    # Version 0.8.1 publishes a register site without proof of identity (and none of its content), where earlier
+    # versions reported it as ambiguous or took the site for the company's own: across such a version step, website
+    # facts that appear or disappear for that reason are not changes of the company.
+    states = {_site_state(prev), _site_state(cur)}
+    reclassified = not same_version and "unverified" in states and len(states) == 2
+    why_version = "a newer agent version classifies the register's website differently (identity not verified)"
     changes, history = [], []
     for key in sorted(set(old) | set(new), key=str):
         a, b = old.get(key), new.get(key)
@@ -101,7 +115,8 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None, observed:
         elif b:
             why = ("its source (%s) failed in the previous run" % SOURCE_OF[field] if SOURCE_OF.get(field) in
                    prev_failed else "the previous agent version did not write this field" if not same_version and
-                   field not in prev_fields else None)
+                   field not in prev_fields else why_version if reclassified and
+                   SOURCE_OF.get(field) == "official_website" else None)
             if why:
                 if observed is not None:
                     observed.append({"field": field, "reporting_period": b.get("reporting_period"),
@@ -115,10 +130,12 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None, observed:
                 carried.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                                 "run_id": prev.get("run", {}).get("run_id"), "failed_source": SOURCE_OF[field]})
                 continue                      # not re-checked in this run: kept, not removed
-            if field in ACCOUNT_FIELDS or field in DATED:
+            if field in ACCOUNT_FIELDS or field in DATED or (reclassified and
+                                                              SOURCE_OF.get(field) == "official_website"):
                 history.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                                 "run_id": prev.get("run", {}).get("run_id")})
-                continue                      # older periods are preserved, not reported as removed
+                continue                      # older periods, or site content a newer version no longer takes,
+                                              # are preserved, not reported as removed
             changes.append({"field": field, "change": "removed", "before": a["value"], "after": None,
                             "evidence_ids": [], "previous_evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                             "previous_run": prev.get("run", {}).get("run_id")})
