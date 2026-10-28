@@ -127,6 +127,19 @@ Gates 2 to 6 never accept a placeholder page (parked, for sale, under constructi
 parking page that names the domain), a site that calls itself by another legal entity's name, or a sole
 proprietorship (which needs its organisation number on the site).
 
+«Names the company» means that the first three words of the legal name without its legal form appear on the checked
+pages: words of under six letters only as whole words (the only name word of «UT PÅ TUR AS» is inside «faktura» and
+«natur»), longer ones also inside a compound or a domain («flexigulv.no»); a name whose only word is short counts only
+as the whole name («ut på tur»); the whole name written as one word of six letters or more counts too («ReproHund»
+for REPRO HUND AS). Gates 2, 5 and 6 rest on contact details that are often someone else's, so since version 0.8.0
+they also need:
+
+- for a candidate from the registered e-mail domain, a site that presents itself as the company: its name in the home
+  page title, `og:site_name` or a JSON-LD organisation name. Small companies often register the e-mail address and
+  the office of their accountant or manager, whose site may mention the client and shows that office;
+- for housing co-operatives and co-ownerships (borettslag, eierseksjonssameie, tingsrettslig sameie), a site they
+  declared themselves; their registered address and e-mail are mostly their manager's.
+
 The register gives a host, not a URL. When a host the company gave (register, own Nav ad, workplace, the domain of
 its registered e-mail address, or the site verified in the previous run) does not resolve, the same domain with or
 without «www.» is tried once; when any candidate's certificate is valid only for the other of these two names, that
@@ -278,6 +291,19 @@ the same companies are all careers pages (each checked), and one company now sho
 vacant-premises page. Facebook links to a page's tabs or its old «/pg/» form now count as the page itself, and links to
 events, videos, photos and posts are not taken for accounts. Key signals: 98 of Builderr's 100 companies get the line;
 every evidence id it cites exists in the envelope.
+
+Version 0.8.0 (28 October 2026). A wrong-company review of all 145 websites that 0.7.0 published for the 1,000-company
+scale sample (the 80 sites without the organisation number on them reviewed by their title, the quoted proof and the
+register data) found two sites of another legal entity, both candidates from the registered e-mail domain and both proved by
+name and registered address: an accounting firm's site for a client registered at the firm's office with the firm's
+mail domain (the client's only name word, «tur», was found inside other words), and a housing manager's site for a
+housing co-operative it manages. Neither ever left this machine. With the rules in «Identity gates» above, a rerun of
+the same 145 companies publishes neither, and three sites whose owner is uncertain also stay unpublished (a group's
+brand site, a car dealer under another name, a site shared by two shops that shows both organisation numbers), while
+the whole-name-as-one-word rule keeps a site that writes the name as one word. Builderr's 100-company sample keeps all
+75 websites. Two other companies of the rerun lost their site only for the run (one answered HTTP 429 to the repeated
+checks, one refused the connection). X profiles are written as `https://x.com/<account>`; a refresh against an
+earlier run that wrote twitter.com reports no change.
 
 The Nav index needs 7 to 15 minutes, depending on Nav's response times (405 feed pages and about 9,500 active ads on 26
 October 2026; 20 parallel reads, at most 50 per second).

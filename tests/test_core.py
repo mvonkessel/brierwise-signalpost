@@ -558,6 +558,35 @@ class Core(unittest.TestCase):
         b["claims"][0]["value"]["url"] = "https://x.com/someoneelse"
         self.assertEqual(sorted(c["change"] for c in compare(a, b)[0]), ["added", "removed"])
 
+    def test_company_named_by_whole_words_and_mail_domain_sites(self):
+        from brierwise_signalpost.website import Page, fold, names_in, presents_company
+        # the only name word of «UT PÅ TUR AS» is inside «faktura» and «natur»: only the whole name counts
+        self.assertFalse(names_in(fold("Faktura, regnskap og lønn. Natur og struktur."), "UT PÅ TUR AS"))
+        self.assertTrue(names_in(fold("Ut på tur – turbutikken i Harstad"), "UT PÅ TUR AS"))
+        # short words only as whole words, long ones also inside a domain or compound
+        self.assertFalse(names_in(fold("biologi3 og kai2"), "BIO3 AS"))
+        self.assertTrue(names_in(fold("Bio3 – fiskehelse"), "BIO3 AS"))
+        self.assertTrue(names_in(fold("velkommen til flexigulv.no"), "FLEXIGULV AS"))
+        self.assertTrue(names_in(fold("Bonden&Kokken"), "BONDEN & KOKKEN AS"))
+        self.assertFalse(names_in(fold("Aaland Bil | Ålesund"), "Per Aaland A/S"))
+        # the whole name as one word
+        self.assertTrue(names_in(fold("ReproHund – Veterinær. Copyright © ReproHund"), "REPRO HUND AS"))
+        self.assertTrue(names_in(fold("bondenogkokken.no"), "BONDEN & KOKKEN AS"))
+        self.assertFalse(names_in(fold("Repro og hundefôr"), "REPRO HUND AS"))
+        # a registered mail domain that is the accountant's or the housing manager's: the site presents someone else
+        acc = Page("https://toco.as/")
+        acc.feed("<html><head><title>TøCo | Godkjent regnskapsselskap | Tett på</title></head>"
+                 "<body>Kunder: Ut på tur AS. Havnegata 4, 9404 Harstad</body></html>")
+        self.assertFalse(presents_company(acc, "UT PÅ TUR AS"))
+        mgr = Page("https://www.labo.no/")
+        mgr.feed('<html><head><title>Larvik Boligbyggelag</title><meta property="og:site_name" content="LABO">'
+                 "</head><body>Denja Hage Bygg A og B borettslag. Prinsegata 4, 3256 Larvik</body></html>")
+        self.assertFalse(presents_company(mgr, "DENJA HAGE BYGG A OG B BORETTSLAG"))
+        own = Page("https://aftn.no/")
+        own.feed("<html><head><title>Aktiv Fysioterapi Nittedal | Din fysioterapeut i Nittedal</title></head>"
+                 "<body>x</body></html>")
+        self.assertTrue(presents_company(own, "AKTIV FYSIOTERAPI NITTEDAL AS"))
+
 
 if __name__ == "__main__":
     unittest.main()

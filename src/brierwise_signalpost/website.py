@@ -65,6 +65,9 @@ def name_core(legal_name: str) -> str:
 # association when it shows the other words. Housing co-ownerships keep theirs; their register sites are mostly the
 # manager's.
 FORM_WORDS = {"stiftelsen", "stiftelse", "stiftinga", "stifting", "foreningen", "forening"}
+# Housing co-operatives and co-ownerships (borettslag, eierseksjonssameie, tingsrettslig sameie): mostly run from a
+# manager's office, whose site lists them and shows that office as their address.
+HOUSING_FORMS = {"BRL", "ESEK", "SAM"}
 # Words for the kind of body that a domain usually leaves out («SAMEIET ST OLAV» on st-olav.no).
 BODY_WORDS = FORM_WORDS | {"sameiet", "sameie", "boligsameiet", "eierseksjonssameiet", "borettslaget", "borettslag",
                            "andelslaget", "andelslag"}
@@ -73,6 +76,26 @@ BODY_WORDS = FORM_WORDS | {"sameiet", "sameie", "boligsameiet", "eierseksjonssam
 def name_tokens(legal_name: str) -> list[str]:
     toks = [t for t in re.split(r"[^a-z0-9]+", fold(name_core(legal_name))) if len(t) >= 3]
     return [t for t in toks if t not in FORM_WORDS] or toks
+
+
+def names_in(folded: str, legal_name: str) -> bool:
+    """Does folded text name the company? The first three name words must all be there; a word of under six letters
+    only as a whole word («tur» is inside «faktura» and «natur»), a longer one also inside a compound or a domain
+    («flexigulv.no»). A name whose only word is short («UT PÅ TUR AS») counts only as the whole name («ut pa tur»).
+    The whole name written as one word of six letters or more also counts («ReproHund» for REPRO HUND AS)."""
+    tokens = name_tokens(legal_name)[:3]
+    if not tokens:
+        return False
+    core = fold(name_core(legal_name))
+    for variant in (core, core.replace("&", " og ")):
+        joined = re.sub(r"[^a-z0-9]+", "", variant)
+        if len(joined) >= 6 and joined in folded:
+            return True
+    if len(tokens) == 1 and len(tokens[0]) < 6:
+        words = [w for w in re.split(r"[^a-z0-9]+", core) if w]
+        return bool(re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % r"[^a-z0-9]+".join(map(re.escape, words)), folded))
+    return all((t in folded) if len(t) >= 6 else
+               bool(re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(t), folded)) for t in tokens)
 
 
 def domain_is_name(host: str, legal_name: str) -> bool:
@@ -522,6 +545,14 @@ def self_names(page: Page) -> list[str]:
     return [n.strip() for n in names if n and n.strip()]
 
 
+def presents_company(page: Page, legal_name: str) -> bool:
+    """Does the site present itself as this company: its name in the home page title or in a name the site gives
+    itself? A registered e-mail address often belongs to the accountant, the housing manager or the parent that keeps
+    the books (toco.as, an accounting firm, for UT PÅ TUR AS; labo.no, Larvik Boligbyggelag, for a housing co-operative
+    it manages), and such a site may show the client's name somewhere and its own office as the client's address."""
+    return names_in(fold((page.title or "") + " | " + " | ".join(self_names(page))), legal_name)
+
+
 def other_entity(page: Page, legal_name: str) -> str | None:
     """A self-name with a legal form («Nortrans AS») that is not this company's name: the site belongs to, or is shared
     with, another legal entity (parent, sister, brand company), so name and address alone prove nothing."""
@@ -636,7 +667,8 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
 
     Candidates, in order: the register's website, homepages the company gave in its own Nav ads, the domain of its
     registered e-mail address, websites registered for its workplaces, domains built from the legal name, and (only
-    with an evaluator key) web-search results. Publication needs one of:
+    with an evaluator key) web-search results. «Names the company» means its first three name words, short ones as
+    whole words (`names_in`). Publication needs one of:
     - the organisation number in a register context («org.nr», «MVA» ...) on the home or a contact page, and the
       company name unless the company itself declared the site;
     - the company name plus the registered street address with house number and postcode on the same domain (not for
@@ -644,6 +676,8 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
     - a site the company declared itself that stays on its domain and names the company;
     - the company name and the full name of its registered daily manager or chair of the board on the site (not for
       shortened-name guesses or workplace sites, and not when a page shows other companies' organisation numbers).
+    The address, leader and mail-domain proofs are not used for housing co-operatives and co-ownerships unless they
+    declared the site, and a mail-domain site must present itself as the company (`presents_company`).
     Anything else stays unpublished; a register entry that fails these tests is reported as «ambiguous»."""
     deadline = time.monotonic() + seconds
     name = entity.get("navn") or ""
@@ -691,7 +725,6 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
     prev_host = site_key(urlsplit(prev_url).hostname) if prev_url else ""
     if prev_url:
         add(prev_url, "previous_run")
-    tokens = name_tokens(name)
     leaders = leaders_of(env)
     deferred = None                                   # the register's own site when it failed the tests
     prev_failed = None                                # the previous run's site when it could not be read now
@@ -770,18 +803,25 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
                     kind, span, proof_snap = k2, s2, snap2
                 if kind == "orgnr":
                     break
-        named = bool(tokens) and all(t in named_text for t in tokens[:3])
-        named_home = bool(tokens) and all(t in home_text for t in tokens[:3])
+        named = names_in(named_text, name)
+        named_home = names_in(home_text, name)
         declared = origin in DECLARED
         other = other_entity(page, name)               # the site calls itself by another legal entity's name
+        form = (entity.get("organisasjonsform") or {}).get("kode") or ""
         # A sole proprietorship often carries a person's name and sits at an employer's or agency's address: only its
         # organisation number on the site ties a site to it.
-        weak_ok = ((entity.get("organisasjonsform") or {}).get("kode") or "") not in ("ENK",) and not other
+        weak_ok = form not in ("ENK",) and not other
+        # Proofs from the name with the address, a registered leader or a mail domain need more where the registered
+        # contact details are often someone else's: a housing co-operative or co-ownership is run from its manager's
+        # office, and a registered e-mail domain may be the accountant's or the manager's, so such a site must present
+        # itself as the company.
+        own_ok = weak_ok and (declared or form not in HOUSING_FORMS) and \
+            (origin != "email_domain" or presents_company(page, name))
         dummy = kind != "orgnr" and placeholder(page)
         lead = None
-        if kind != "orgnr" and leaders and named and same_domain and weak_ok and origin in LEADER_ORIGINS and \
+        if kind != "orgnr" and leaders and named and same_domain and own_ok and origin in LEADER_ORIGINS and \
                 not dummy and not any(other_orgnrs(t, env.orgnr) for _, t in texts) and \
-                all(t in without_leaders(named_text, leaders) for t in tokens[:3]) and \
+                names_in(without_leaders(named_text, leaders), name) and \
                 not any(titled_entity(page, t, name) for _, t in texts):
             for s2, t2 in texts:
                 hit = leader_on_page(t2, leaders)
@@ -794,14 +834,14 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             proof = None
         elif kind == "orgnr_shared" and declared and origin != "subunit_listed" and weak_ok:
             proof, conf = "organisation number shown on the site next to other companies' numbers", 0.9
-        elif kind == "address" and named and same_domain and origin != "name_short" and weak_ok:
+        elif kind == "address" and named and same_domain and origin != "name_short" and own_ok:
             proof, conf = "the site names the company and shows its registered street address", 0.9
         elif declared and origin != "subunit_listed" and same_domain and named_home and weak_ok and not plain:
             proof, conf = DECLARED[origin] + "; site names the company", 0.85
         elif origin == "registry_listed" and weak_ok and not plain and domain_is_name(final_host, name):
             proof, conf = DECLARED[origin] + ("; the domain spells the company name" if same_domain else
                                               "; it forwards to %s, which spells the company name" % final_host), 0.8
-        elif origin == "email_domain" and same_domain and named_home and weak_ok and not plain:
+        elif origin == "email_domain" and same_domain and named_home and own_ok and not plain:
             proof, conf = "the site names the company on its home page", 0.8
         elif lead:
             proof, conf = "the site names the company and its registered %s" % LEADER_ROLES[lead[0]], 0.85
