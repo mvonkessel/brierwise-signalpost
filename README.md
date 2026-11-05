@@ -50,9 +50,9 @@ not a change of the company is not reported as one:
 
 Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
-## Smoke test (28 October 2026)
+## Smoke test (5 November 2026)
 
-`smoke-test/` holds the 100-company smoke test of this code (version 0.8.1). The batch (`smoke-test/batch.jsonl`) is
+`smoke-test/` holds the 100-company smoke test of this code (version 0.8.2). The batch (`smoke-test/batch.jsonl`) is
 the starter kit's standard draw, `select_entry_batch.py` with its default seed: `random.Random(20260823).sample` of 100
 rows of the public universe in file order (rebuilt in a few lines; the kit's code itself was not run). Both runs
 started from a fresh clone in an empty virtual environment without pip:
@@ -63,19 +63,16 @@ PYTHONPATH=src python -m brierwise_signalpost run --organisations smoke-test/bat
 # the same command again, with --report smoke-test/run-2-refresh-report.json
 ```
 
-- First run (`run-1-report.json`): 100 of 100 envelopes, all completed, in 721 s (set by the Nav index: 9,510 of
-  9,696 listed active ads read, one unreadable), 5.2 s per company at the median and 13.2 s at p95, 11,056 requests,
-  no third-party cost, 6,858 claims. Identity, accounts, leadership and hiring are available for all 100. Website:
+- First run (`run-1-report.json`): 100 of 100 envelopes, all completed, in 320 s (set by the Nav index: 9,253 of
+  9,291 listed active ads read, none unreadable), 4.9 s per company at the median and 12.0 s at p95, 10,555 requests,
+  no third-party cost, 6,855 claims. Identity, accounts, leadership and hiring are available for all 100. Website:
   7 verified, 1 given in the register without proof of identity (a store operator that lists its chain's site; the
-  site's content is not taken for the company), 2 `ambiguous` (one redirects to another firm's site, one answers only
-  over plain http without the registered address, leader or number), 1 `failed` (self-signed certificate),
-  89 `not_available`. Two companies link their own profiles (5), two publish dated posts (13); none has an active
-  Nav ad. 98 of 100 summaries carry a line of key signals. Version 0.7.1 had published two more websites on this
-  batch, both housing managers' sites, and their news (see «Evaluation»); version 0.8.0 reported the store
-  operator's register site as `ambiguous`.
+  site's content is not taken for the company), 1 `ambiguous` (it redirects to another firm's site), 1 `failed`
+  (a certificate that cannot be verified), 90 `not_available`. Two companies link their own profiles (4), two publish
+  dated posts (13); none has an active Nav ad. 98 of 100 summaries carry a line of key signals.
 - Refresh (`run-2-refresh-report.json`), the same command right afterwards: the first run's envelopes are kept under
   `smoke-test/snapshots/`, all 100 companies were matched with them, 0 material changes, nothing carried forward or
-  first observed; 402 s, 10,974 requests. `smoke-test/envelopes.jsonl` is this run's output.
+  first observed; 441 s, 10,559 requests. `smoke-test/envelopes.jsonl` is this run's output.
 - The static site of the refresh run is in `docs/` and served at https://mvonkessel.github.io/brierwise-signalpost/
   (search, filters, sorting, comparison, evidence links; desktop and mobile).
 
@@ -151,10 +148,11 @@ that are often someone else's, so since version 0.8.0 they also need:
 
 Sites of another legal entity (since version 0.8.2). Without the company's own number on the site, gates 2 to 6 do not
 hold when the checked pages show that another legal entity runs the site: a register number that is neither the
-company's nor one of its workplaces', a name from the page title that the pages print with a legal form, or the name
-in the copyright line, when that name is not part of the legal name. Gate 4 is exempt from this check, because the company itself lists a domain that spells
-its name. They do not hold either for a site that three or more legal entities list in the register (a manager's, a
-chain's or a group's: 821 domains of the public universe, in `shared_sites.py`, rebuilt by
+company's nor one of its workplaces', a name from the page title or `og:site_name` that the pages print with a legal
+form, or the name in the copyright line, when that name and the legal name do not contain each other. A site the
+company lists in the register whose domain spells its name is exempt from this check. The gates do not hold either for
+a site that three or more legal entities list in the register (a manager's, a chain's or a group's: 821 domains of the
+public universe without platforms and directories, in `shared_sites.py`, a declared cache of domain names rebuilt by
 `tools/build_shared_sites.py`), unless it presents itself as this company or its domain spells the name. Such a site
 is at most the register's website below.
 
@@ -383,6 +381,46 @@ October 2026; 20 parallel reads, at most 50 per second).
 Known gaps: sites whose TLS certificate chain cannot be verified are not read; parked and directory domains are
 rejected; without a search key, companies whose website is neither in the register nor at a domain built from their
 name or their registered e-mail domain stay without a website.
+
+Version 0.8.2 (5 November 2026). A last review before the final revision date, of 0.8.1 on a fresh sample of 1,400
+companies: 1,000 at random (seed 20261105) and 400 from the 70,045 companies with ten or more employees, the form ASA
+or a website in the universe. 0.8.1 published 385 websites: 134 with the organisation number on the site, 152 on other
+proofs, 99 as «identity not verified». All 152 were read against title, quoted proof and register data, and so were the
+42 of 336 profiles whose account name differs from the site's domain. That reading found:
+
+- the site of another company: TRONDHEIM EL AS, called Trondheim VVS AS until 2020, has a workplace that still lists
+  trondheimvvs.no. The word «Trondheim» alone counted as its name, because the other name word has under three letters,
+  and the site shows the registered address; it also shows «Org.nr: 998027160» and «© Trondheim VVS AS», a name that
+  another company at this address now carries. The company's own site is trondheimel.no, which 0.8.2 finds;
+- a manager's content: a foundation that lists unifor.no, as 158 foundations do, got the manager's description, brand,
+  two profiles and six news items, because «til», «støtte» and «for» counted as its name;
+- profiles of others: a dealer's pages in Lillehammer from the JSON-LD `sameAs` of an organisation called «Bilkompaniet»
+  on a dealer's site in Moss, and a church's page on the site of a festival that shares its place name;
+- two envelopes ended `failed`: a link with spaces raised an error the HTTP client did not catch.
+
+The new check for other bodies' numbers then found what reading titles and quotes had missed: MOTOR FORUM AS had the
+site of its namesake in Bergen, BUGØYNES OPPLEVELSER AS a site that shows the number of BUGØYNES SJØFRONT AS, and
+TRG-ELEKTRO AS a site that shows the number of an earlier, deleted company of the same name (perhaps its own site with an
+old number; it is left out all the same). A second reader (another model, given the diff, not
+this review) found no fault that must be fixed; its points on a site's copyright line, on common words as profile marks and on
+refresh across versions are in this version.
+
+With the rules above, a rerun of the 460 companies of the sample with any website result gives 273 verified websites
+(286 before) and 107 «identity not verified» (99 before). Eight sites moved from verified to the register's website
+without its content (a manager's, parents', chain or group sites), and three verified sites of 0.8.1 are no longer
+published because they show a namesake's or another company's number, one because its copyright line names another
+company and one because it is a chain's shared site reached through a workplace. TRONDHEIM EL AS has its own site now.
+Two companies moved the other way: one site could be read this time, and one foundation's site now presents itself as
+the foundation under the corrected name rule. The stricter profile rules also drop a few accounts that are probably
+the company's own, such as a dealer's brand page («SubaruMoss.no») and a centre's page under its abbreviation and place:
+a missed fact, not a wrong one.
+Two other verified sites gave no usable answer in that run, the fourth that day; one of them was verified again in a
+single run afterwards. On 200 random companies of the 5,330 outside housing that list a shared site, 151 are published as «identity not verified» and 15 as verified (9 with their number on the site, 6 on other proofs; all 15 were read and are the company's own), the rest being ambiguous or unreadable.
+Builderr's 100-company sample keeps its websites, except that PEAB BYGG AS, one of several companies that list peab.no,
+now has it as «identity not verified» without its content, one site answered HTTP 429 in that run, and two sites that
+had refused the earlier run were read. A second fresh sample of 1,000 companies (700 at random, seed 20261107, and 300 larger ones, none from the first sample) run with 0.8.2 published 283 websites: 91 with the number on the site, 108 on other proofs, 84 as «identity not verified». Reading the 108 found no site of another legal entity; the list of profiles turned up a theme vendor's accounts in a site's structured data under the site's own name, which the profile rule above now leaves out. These runs used the first commit of this version; the two later commits
+change a copyright pattern, refresh and the `sameAs` rule. On the 200 companies of the smoke test and Builderr's sample,
+run with both, the website result of every company but one (a timeout) stayed the same.
 
 ## Licence
 
