@@ -45,8 +45,8 @@ not a change of the company is not reported as one:
   the register gives the same update sometimes in local time and sometimes in UTC;
 - between two agent versions only the value fields both versions write are compared, and website facts that appear
   or disappear only because a newer version publishes a register site as «identity not verified» (or no longer
-  takes such a site's content) are counted under `refresh.first_observed` or kept in `history`, not reported as
-  changes.
+  takes such a site's content), no longer takes a verified site for the company's own, or no longer takes a `sameAs`
+  profile, are counted under `refresh.first_observed` or kept in `history`, not reported as changes.
 
 Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
@@ -136,16 +136,27 @@ proprietorship (which needs its organisation number on the site).
 
 «Names the company» means that the first three words of the legal name without its legal form appear on the checked
 pages: words of under six letters only as whole words (the only name word of «UT PÅ TUR AS» is inside «faktura» and
-«natur»), longer ones also inside a compound or a domain («flexigulv.no»); a name whose only word is short counts only
-as the whole name («ut på tur»); the whole name written as one word of six letters or more counts too («ReproHund»
-for REPRO HUND AS). Gates 2, 5 and 6 rest on contact details that are often someone else's, so since version 0.8.0
-they also need:
+«natur»), longer ones also inside a compound or a domain («flexigulv.no»); little words among the three («til», «for»,
+«med» ...) are not asked for; a name with one usable word counts only as the whole name when that word is short
+(«ut på tur») or the name
+has other words («TRONDHEIM EL AS» is not named by the word «Trondheim»; since version 0.8.2); the whole name written
+as one word of six letters or more counts too («ReproHund» for REPRO HUND AS). Gates 2, 5 and 6 rest on contact details
+that are often someone else's, so since version 0.8.0 they also need:
 
 - for a candidate from the registered e-mail domain, a site that presents itself as the company: its name in the home
   page title, `og:site_name` or a JSON-LD organisation name. Small companies often register the e-mail address and
   the office of their accountant or manager, whose site may mention the client and shows that office;
 - for housing co-operatives and co-ownerships (borettslag, eierseksjonssameie, tingsrettslig sameie), a site they
   declared themselves; their registered address and e-mail are mostly their manager's.
+
+Sites of another legal entity (since version 0.8.2). Without the company's own number on the site, gates 2 to 6 do not
+hold when the checked pages show that another legal entity runs the site: a register number that is neither the
+company's nor one of its workplaces', a name from the page title that the pages print with a legal form, or the name
+in the copyright line, when that name is not part of the legal name. Gate 4 is exempt from this check, because the company itself lists a domain that spells
+its name. They do not hold either for a site that three or more legal entities list in the register (a manager's, a
+chain's or a group's: 821 domains of the public universe, in `shared_sites.py`, rebuilt by
+`tools/build_shared_sites.py`), unless it presents itself as this company or its domain spells the name. Such a site
+is at most the register's website below.
 
 Register sites without proof of identity (since version 0.8.1). A website the company lists in the register that
 answers on its own domain but passes none of the gates (it does not name the company, or it presents itself as another
@@ -174,10 +185,12 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
 - Person data is used only in the company-centric role context: name and function of officers as published by the
   register. Dates of birth, registered phone numbers and e-mail addresses are not read into claims. Contact persons
   in job ads are not used.
-- Social profiles are published only when the verified company site links them (JSON-LD `sameAs`, or an outbound link
-  on the home page or its first contact or about page whose account name contains a word of the company name or the
-  site's domain label; a three-letter word counts only as the whole account name, so that «KaiHenningMelberg» is not
-  taken for «KAI MARKETING AS»), at most two accounts per platform, the same account only once whatever scheme, host
+- Social profiles are published only when the verified company site links them (JSON-LD `sameAs` of an item that names
+  the company, or any `sameAs` or outbound link on the home page or its first contact or about page whose account name
+  contains a word of the company name or the site's domain label; a three-letter word counts only as the whole account
+  name, so that «KaiHenningMelberg» is not taken for «KAI MARKETING AS», and the company's municipality or post town
+  does not count when the name has other words, nor do words many names share such as «kommune» or «bygg», so that the
+  church page «kyrkjagloppen» is not taken for STIFTINGA GLOPPEN MUSIKKFEST), at most two accounts per platform, the same account only once whatever scheme, host
   or case the link uses, LinkedIn pages in their canonical form `/company/<name>`; or when the company gives the
   profile as its website in the register. No platform is scraped.
 - A careers page is the first link on the verified home page whose path names careers or jobs as a whole word

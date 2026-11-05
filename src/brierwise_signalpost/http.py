@@ -3,8 +3,10 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import http.client
 import ipaddress
 import json
+import re
 import socket
 import threading
 import time
@@ -143,7 +145,9 @@ class Client:
             with self._lock:
                 self.requests[host] += 1
             try:
-                req = urllib.request.Request(url, headers=head)
+                # a link may hold spaces («/en/news/This is GravelBirken 100»); browsers send them as %20
+                req = urllib.request.Request(re.sub(r"[\x00-\x20\x7f]", lambda m: "%%%02X" % ord(m.group()), url),
+                                             headers=head)
                 with self._opener.open(req, timeout=timeout) as r:
                     body = r.read(self.max_bytes + 1)[: self.max_bytes]
                     hdrs = {k.lower(): v for k, v in r.headers.items()}
@@ -165,7 +169,8 @@ class Client:
                 pause = float(retry_after) if retry_after.isdigit() else 1.5 * (attempt + 1)
                 if attempt < retries:
                     time.sleep(min(pause, 10.0))
-            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError) as e:
+            except (urllib.error.URLError, TimeoutError, ConnectionError, OSError, ValueError,
+                    http.client.HTTPException) as e:
                 last = Response(url, url, 0, {}, b"", now_iso(), "network: %s" % str(e)[:160],
                                 int((time.monotonic() - t0) * 1000))
                 if attempt < retries:

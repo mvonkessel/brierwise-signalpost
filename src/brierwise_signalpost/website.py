@@ -15,6 +15,7 @@ from html.parser import HTMLParser
 from urllib.parse import urljoin, urlsplit, urlunsplit
 
 from .http import USER_AGENT
+from .shared_sites import SHARED_SITES
 from .model import Envelope, state_of_status
 
 LEGAL_SUFFIX = re.compile(r"\b(AS|ASA|ANS|DA|SA|BA|NUF|ENK|IKS|KF|SF|STI|FLI|BRL|ESEK|SAM|KS|PRE)\b\.?$", re.I)
@@ -73,6 +74,11 @@ BODY_WORDS = FORM_WORDS | {"sameiet", "sameie", "boligsameiet", "eierseksjonssam
                            "andelslaget", "andelslag"}
 
 
+# Little words of a name say nothing about the company and stand on every page: «STIFTELSEN TIL STØTTE FOR
+# ALLMENNYTTIGE ...» was «named» on a foundation manager's home page by «til», «støtte» and «for».
+NAME_STOP = {"til", "for", "med", "fra", "det", "den", "dei", "ved", "hos", "paa", "the", "and"}
+
+
 def name_tokens(legal_name: str) -> list[str]:
     toks = [t for t in re.split(r"[^a-z0-9]+", fold(name_core(legal_name))) if len(t) >= 3]
     return [t for t in toks if t not in FORM_WORDS] or toks
@@ -81,9 +87,11 @@ def name_tokens(legal_name: str) -> list[str]:
 def names_in(folded: str, legal_name: str) -> bool:
     """Does folded text name the company? The first three name words must all be there; a word of under six letters
     only as a whole word («tur» is inside «faktura» and «natur»), a longer one also inside a compound or a domain
-    («flexigulv.no»). A name whose only word is short («UT PÅ TUR AS») counts only as the whole name («ut pa tur»).
-    The whole name written as one word of six letters or more also counts («ReproHund» for REPRO HUND AS)."""
-    tokens = name_tokens(legal_name)[:3]
+    («flexigulv.no»). A name with one usable word counts only as the whole name when that word is short («UT PÅ TUR
+    AS»: «ut pa tur») or the name has other words: TRONDHEIM EL AS is not named by the word «Trondheim». The whole
+    name written as one word of six letters or more also counts («ReproHund» for REPRO HUND AS)."""
+    first = name_tokens(legal_name)[:3]
+    tokens = [t for t in first if t not in NAME_STOP] or first
     if not tokens:
         return False
     core = fold(name_core(legal_name))
@@ -91,8 +99,8 @@ def names_in(folded: str, legal_name: str) -> bool:
         joined = re.sub(r"[^a-z0-9]+", "", variant)
         if len(joined) >= 6 and joined in folded:
             return True
-    if len(tokens) == 1 and len(tokens[0]) < 6:
-        words = [w for w in re.split(r"[^a-z0-9]+", core) if w]
+    words = [w for w in re.split(r"[^a-z0-9]+", core) if w and w not in FORM_WORDS]
+    if len(tokens) == 1 and (len(tokens[0]) < 6 or len(words) > 1):
         return bool(re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % r"[^a-z0-9]+".join(map(re.escape, words)), folded))
     return all((t in folded) if len(t) >= 6 else
                bool(re.search(r"(?<![a-z0-9])%s(?![a-z0-9])" % re.escape(t), folded)) for t in tokens)
@@ -490,16 +498,21 @@ def address_keys(entity: dict) -> list[tuple]:
 ANY_ORGNR = re.compile(r"(?<!\d)([89]\d{2})[\s \.\-]?(\d{3})[\s \.\-]?(\d{3})(?!\d)")
 
 
-def other_orgnrs(text: str, own: str) -> int:
-    """Distinct valid organisation numbers other than `own` shown in a register context: a page listing several
-    companies (group overview, directory, accountant's client list) proves nobody's identity."""
+def other_numbers(text: str, own: str) -> set:
+    """Distinct valid organisation numbers other than `own` shown in a register context."""
     from .model import valid_orgnr
     found = set()
     for m in ANY_ORGNR.finditer(text):
         n = "".join(m.groups())
         if n != own and valid_orgnr(n) and ORG_CONTEXT.search(text[max(0, m.start() - 40): m.start()]):
             found.add(n)
-    return len(found)
+    return found
+
+
+def other_orgnrs(text: str, own: str) -> int:
+    """How many other companies' numbers a page shows: a page listing several companies (group overview, directory,
+    accountant's client list) proves nobody's identity."""
+    return len(other_numbers(text, own))
 
 
 def scan_page(text: str, pat: re.Pattern, keys: list) -> tuple:
@@ -555,6 +568,31 @@ def handle_matches(slug: str, marks: set) -> bool:
         if len(m) == 3 and re.fullmatch(r"%s(as|asa|no|norge|norway|group|official)?\d*" % re.escape(m), handle):
             return True
     return False
+
+
+# Words that many bodies' names share: an account carrying only such a word says nothing («tonsbergkommune» for a
+# foundation «... I TØNSBERG KOMMUNE», «byggmakker» for OLSEN BYGG AS).
+GENERIC_MARKS = {"kommune", "kommunen", "fylke", "fylkeskommune", "kirke", "kirken", "kyrkje", "kyrkja", "menighet",
+                 "norge", "norway", "norsk", "norske", "nordic", "gruppen", "group", "holding", "invest", "eiendom",
+                 "bygg", "service", "services", "transport", "drift", "partner", "partners", "senter", "center",
+                 "stotte", "formal", "forening"}
+
+
+def own_marks(env: Envelope, host: str) -> set:
+    """Words a profile address of this company should carry: its name words and the site's domain label. The place
+    in a name is not one of them when the name has other words: facebook.com/kyrkjagloppen, the church of Gloppen, is
+    linked from the site of STIFTINGA GLOPPEN MUSIKKFEST but is not the festival's page. Nor are words many names
+    share."""
+    places = set()
+    for c in env.claims:
+        v = c.get("value")
+        if c.get("field") == "municipality" and isinstance(v, dict):
+            places.update(re.split(r"[^a-z0-9]+", fold(v.get("name") or "")))
+        elif c.get("field") == "business_address" and isinstance(v, str):
+            town = re.search(r"\b\d{4}\s+(.+)$", v)
+            places.update(re.split(r"[^a-z0-9]+", fold(town.group(1))) if town else [])
+    tokens = [t for t in name_tokens(env.legal_name or "") if t not in NAME_STOP]
+    return set([t for t in tokens if t not in places and t not in GENERIC_MARKS] or tokens) | {fold(host.split(".")[0])}
 
 
 def self_names(page: Page) -> list[str]:
@@ -657,6 +695,37 @@ def titled_entity(page: Page, text: str, legal_name: str) -> str | None:
     return None
 
 
+# «© 2026 Trondheim VVS AS», «Copyright Olsen & Sønn AS»: the name a site's copyright line gives, with its legal form.
+COPYRIGHT = re.compile(r"(?:©|\((?i:c)\)|(?i:copyright))\s*(?:©\s*)?(?:\d{4}\s*(?:[-–]\s*\d{4}\s*)?)?"
+                       r"([^\W\d][^|·•©,:;(\n]{1,60}?)\s+(?:AS|ASA|ANS|DA|SA)\b")
+
+
+def rival_entity(page: Page, texts: list, legal_name: str, own: str, subunits: list | None) -> str | None:
+    """Why a site that names the company and even shows its address is another legal entity's, or None. A site's owner
+    is on its pages: a register number that is neither the company's nor one of its workplaces', a name from the title
+    that the pages print with a legal form, or the name in the copyright line. TRONDHEIM EL AS, once called Trondheim
+    VVS AS, still has a workplace that lists trondheimvvs.no, but that site shows «Org.nr: 998027160» and «© Trondheim
+    VVS AS»: another company at the same address now runs it. A brand that is part of the legal name, or the reverse,
+    proves nothing."""
+    workplaces = {str(u.get("organisation_number")) for u in subunits or []}
+    numbers = set()
+    for _, text in texts:
+        numbers |= other_numbers(text, own)
+    numbers -= workplaces
+    if numbers:
+        return "shows the organisation number %s of another legal entity" % min(numbers)
+    core = re.sub(r"[^a-z0-9]+", " ", fold(name_core(legal_name))).strip()
+    for _, text in texts:
+        brand = titled_entity(page, text, legal_name)
+        if brand and brand not in core and core not in brand:
+            return "presents itself as «%s», another legal entity" % brand
+        for m in COPYRIGHT.finditer(text):
+            holder = re.sub(r"[^a-z0-9]+", " ", fold(m.group(1))).strip()
+            if holder and holder not in core and core not in holder:
+                return "presents itself as «%s», another legal entity" % holder
+    return None
+
+
 def without_leaders(folded: str, leaders: list[tuple[str, str]]) -> str:
     """Folded text with the leaders' names blanked out: the company name must appear on its own, not only inside a
     person's name («NORDMANN BYGG AS» and its daily manager «Ola Nordmann Berg»)."""
@@ -697,7 +766,10 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
     - the company name and the full name of its registered daily manager or chair of the board on the site (not for
       shortened-name guesses or workplace sites, and not when a page shows other companies' organisation numbers).
     The address, leader and mail-domain proofs are not used for housing co-operatives and co-ownerships unless they
-    declared the site, and a mail-domain site must present itself as the company (`presents_company`).
+    declared the site, and a mail-domain site must present itself as the company (`presents_company`). Without the
+    company's own number no proof holds when the pages show that another legal entity runs the site (`rival_entity`)
+    or when the site is one that three or more legal entities list in the register and it does not present itself as
+    this one (`SHARED_SITES`: a manager's, a chain's or a group's site).
     Anything else stays unpublished. A register site that answers on its own domain but fails these tests (or passes
     them without presenting itself as the company, for a housing co-operative or co-ownership or through other
     bodies' numbers next to its own) is published as the website the register gives, marked «identity not verified»
@@ -873,6 +945,15 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             kind, span, proof_snap = "leader", lead[1], lead[2]
         else:
             proof = None
+        rejected = None
+        if proof is not None and kind not in ("orgnr", "orgnr_shared"):
+            spelled = domain_is_name(final_host, name)
+            if not (origin == "registry_listed" and spelled):
+                rejected = rival_entity(page, texts, name, env.orgnr, subunits)
+            if not rejected and final_host in SHARED_SITES and not spelled and not presents_company(page, name):
+                rejected = "is listed in the register by several legal entities and does not present itself as this one"
+            if rejected:
+                proof = None
         if proof is not None and kind != "orgnr" and origin == "registry_listed" and \
                 (form in HOUSING_FORMS or kind == "orgnr_shared") and \
                 not domain_is_name(final_host, name) and not presents_company(page, name):
@@ -883,13 +964,15 @@ def find_website(client, env: Envelope, entity: dict, seconds: float = 75.0, ext
             continue
         if proof is None:
             if origin == "registry_listed":
-                why_not = ("looks like a placeholder (parked, for sale, coming soon or switched off)" if dummy else
+                why_not = (rejected if rejected else
+                           "looks like a placeholder (parked, for sale, coming soon or switched off)" if dummy else
                            "presents itself as «%s», another legal entity," % other if other else
                            "redirects to %s" % final_host if not same_domain else
                            "answers only over plain http, without the registered address or a registered leader,"
                            if plain else "does not name the company")
                 deferred = ("ambiguous", [env.cite(snap, (page.title or "")[:160], "homepage")],
-                            "%s, but the site %s and shows no organisation number" % (DECLARED[origin], why_not), 0.4)
+                            ("%s, but the site %s" if rejected else "%s, but the site %s and shows no organisation number")
+                            % (DECLARED[origin], why_not), 0.4)
                 if not dummy and same_domain and not plain:
                     unverified = unverified or (r.final_url, snap, page, why_not.rstrip(","))
             continue                                   # no proof: never published
@@ -962,14 +1045,17 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
         key = "%s:%s?%s" % (plat, p.path.lower().rstrip("/"), p.query)   # same account whatever scheme, host or case
         if key not in profiles and sum(v[0] == plat for v in profiles.values()) < 2:
             profiles[key] = (plat, u, link, how, s)
+    marks = own_marks(env, host)
     for it in items:
         same = it.get("sameAs")
+        # structured data can be a template's leftovers: mossautocenter.no describes an organisation «Bilkompaniet»
+        # with the Facebook page of a dealer in Lillehammer. The item must name the company, or the account must.
+        own = isinstance(it.get("name"), str) and names_in(fold(it["name"]), env.legal_name or "")
         for s in (same if isinstance(same, list) else [same]):
             if isinstance(s, str):
                 for plat, rx in SOCIAL.items():
-                    if rx.match(s):
+                    if rx.match(s) and (own or handle_matches(fold(urlsplit(profile_url(s)).path), marks)):
                         keep(plat, s, "JSON-LD sameAs", snap)
-    marks = set(name_tokens(env.legal_name or "")) | {fold(host.split(".")[0])}
     pages = [(page, snap, "outbound link on the company site")]
     for link, text in page.links:
         lp = urlsplit(link)

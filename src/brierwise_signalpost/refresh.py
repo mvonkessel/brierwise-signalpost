@@ -61,6 +61,11 @@ def _site_state(env: dict) -> str | None:
     return "unverified" if "identity not verified" in (w.get("note") or "") else "verified"
 
 
+def _site_value(env: dict):
+    w = next((c for c in env.get("claims", []) if c.get("field") == "official_website"), None)
+    return w.get("value") if w and w.get("availability") == "available" else None
+
+
 def _facts(env: dict) -> dict:
     out = {}
     for c in env.get("claims", []):
@@ -97,8 +102,11 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None, observed:
     # Version 0.8.1 publishes a register site without proof of identity (and none of its content), where earlier
     # versions reported it as ambiguous or took the site for the company's own: across such a version step, website
     # facts that appear or disappear for that reason are not changes of the company.
+    # Version 0.8.2 also drops sites that other legal entities run, or moves on to the company's own site.
     states = {_site_state(prev), _site_state(cur)}
-    reclassified = not same_version and "unverified" in states and len(states) == 2
+    reclassified = not same_version and (("unverified" in states and len(states) == 2) or (
+        _site_state(prev) == "verified" and _site_state(cur) not in ("failed", "blocked") and
+        _site_value(prev) != _site_value(cur)))
     why_version = "a newer agent version classifies the register's website differently (identity not verified)"
     changes, history = [], []
     for key in sorted(set(old) | set(new), key=str):
@@ -107,6 +115,13 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None, observed:
         if a and b:
             va, vb = _comparable(a["value"], b["value"], same_version)
             if json.dumps(va, sort_keys=True, default=str) != json.dumps(vb, sort_keys=True, default=str):
+                if reclassified and SOURCE_OF.get(field) == "official_website":
+                    history.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
+                                    "run_id": prev.get("run", {}).get("run_id")})
+                    if observed is not None:
+                        observed.append({"field": field, "reporting_period": b.get("reporting_period"),
+                                         "evidence_ids": b["evidence_ids"], "reason": why_version})
+                    continue                  # a version effect, kept under history, not a change of the company
                 changes.append({"field": field, "change": "changed", "before": a["value"], "after": b["value"],
                                 "reporting_period": b.get("reporting_period"), "evidence_ids": b["evidence_ids"],
                                 "previous_run": prev.get("run", {}).get("run_id")})
@@ -130,8 +145,9 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None, observed:
                 carried.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                                 "run_id": prev.get("run", {}).get("run_id"), "failed_source": SOURCE_OF[field]})
                 continue                      # not re-checked in this run: kept, not removed
-            if field in ACCOUNT_FIELDS or field in DATED or (reclassified and
-                                                              SOURCE_OF.get(field) == "official_website"):
+            dropped = not same_version and field == "company_profile" and "sameAs" in (a.get("note") or "")
+            if field in ACCOUNT_FIELDS or field in DATED or dropped or (reclassified and
+                                                                        SOURCE_OF.get(field) == "official_website"):
                 history.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                                 "run_id": prev.get("run", {}).get("run_id")})
                 continue                      # older periods, or site content a newer version no longer takes,

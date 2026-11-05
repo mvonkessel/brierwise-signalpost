@@ -687,6 +687,230 @@ class Core(unittest.TestCase):
         a["run"]["agent_version"] = c["run"]["agent_version"] = "0.8.1"
         self.assertEqual([x["change"] for x in compare(a, c)[0]], ["added"])
 
+    def test_sites_of_other_legal_entities(self):
+        from brierwise_signalpost.http import Response
+        from brierwise_signalpost.shared_sites import SHARED_SITES
+        from brierwise_signalpost.website import find_website, fold, names_in
+
+        class FakeClient:
+            """Pages by URL; robots.txt is missing everywhere, and any other host does not resolve."""
+            def __init__(self, pages):
+                self.pages = pages
+
+            def get(self, url, **kw):
+                if url.endswith("/robots.txt"):
+                    host = url.split("/")[2]
+                    known = any(u.split("/")[2] == host for u in self.pages)
+                    return Response(url, url, 404 if known else 0, error="" if known else "getaddrinfo failed")
+                if url in self.pages:
+                    return Response(url, url, 200, {"content-type": "text/html; charset=utf-8"},
+                                    self.pages[url].encode("utf-8"))
+                return Response(url, url, 0, error="getaddrinfo failed")
+
+        def search(name, form, pages, homepage=None, subunits=None):
+            env = Envelope("954079996", {})
+            entity = {"navn": name, "organisasjonsform": {"kode": form}, "hjemmeside": homepage,
+                      "forretningsadresse": {"adresse": ["Øvre Flatåsveg 12"], "postnummer": "7079",
+                                             "poststed": "FLATÅSEN"}}
+            found = find_website(FakeClient(pages), env, entity, seconds=30, subunits=subunits)
+            return found, next(c for c in env.claims if c["field"] == "official_website")
+
+        # a place name is not the company's name, and little words are not either
+        self.assertFalse(names_in(fold("Rørlegger i Trondheim og omegn"), "TRONDHEIM EL AS"))
+        self.assertTrue(names_in(fold("Trondheim El AS, Flatåsen"), "TRONDHEIM EL AS"))
+        self.assertTrue(names_in(fold("trondheimel.no"), "TRONDHEIM EL AS"))
+        self.assertTrue(names_in(fold("A. Tangen AS"), "A. TANGEN AS"))
+        self.assertFalse(names_in(fold("Bror Tangen AS"), "A. TANGEN AS"))
+        self.assertTrue(names_in(fold("Holmen"), "STIFTELSEN HOLMEN"))
+        long_name = "STIFTELSEN TIL STØTTE FOR ALLMENNYTTIGE, RELIGIØSE OG KULTURELLE FORMÅL I TØNSBERG KOMMUNE"
+        self.assertFalse(names_in(fold("Vi gir støtte til stiftelser for framtiden"), long_name))
+        self.assertTrue(names_in(fold("Stiftelsen til støtte for allmennyttige, religiøse og kulturelle formål i Tønsberg "
+                                      "kommune"), long_name))
+        # the first three name words are chosen before little words go: a fourth word is not asked for
+        self.assertTrue(names_in(fold("CAS - Senter for grunnforskning"),
+                                 "STIFTELSEN SENTER FOR GRUNNFORSKNING VED DET NORSKE VIDENSKAPS-AKADEMI"))
+
+        # a workplace still lists the site of a company at the same address that now carries the old name
+        sister = ("<html><head><title>Trondheim VVS - Rørlegger i Trondheim</title></head><body>Rørlegger og Trondheim "
+                  "El. Øvre Flatåsveg 12, 7079 Flatåsen. © Trondheim VVS AS</body></html>")
+        unit = [{"organisation_number": "995887606", "website": "www.trondheimvvs.no"}]
+        found, c = search("TRONDHEIM EL AS", "AS", {"https://www.trondheimvvs.no/": sister}, subunits=unit)
+        self.assertEqual((found["status"], c["value"]), ("not_available", None))
+
+        # the owner may stand only in the copyright line, under a title that names nobody
+        footer = ("<html><head><title>Rørlegger i Trondheim</title></head><body>Trondheim El. Øvre Flatåsveg 12, 7079 "
+                  "Flatåsen. © 2026 Trondheim VVS AS. Ring oss</body></html>")
+        found, c = search("TRONDHEIM EL AS", "AS", {"https://www.trondheimvvs.no/": footer}, subunits=unit)
+        self.assertEqual((found["status"], c["value"]), ("not_available", None))
+        found, c = search("TRONDHEIM EL AS", "AS", {"https://www.trondheimvvs.no/": footer.replace("VVS AS", "El AS")},
+                          subunits=unit)
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+
+        # the company's own number next to other companies' numbers is judged by the older rule, not as a rival's site
+        both = ("<html><head><title>Bygg Partner</title></head><body>Bygg Partner AS. Org.nr 954 079 996. Foo AS "
+                "Org.nr 998 027 160</body></html>")
+        found, c = search("BYGG PARTNER AS", "AS", {"https://www.bp-bygg.no/": both}, homepage="www.bp-bygg.no")
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+        self.assertIn("next to other companies' numbers", c["note"])
+
+        # a site that shows another company's number is that company's, unless it is the company's own workplace
+        other = ("<html><head><title>Forside</title></head><body>Bygg Partner. Øvre Flatåsveg 12, 7079 Flatåsen. "
+                 "Org.nr: 998027160</body></html>")
+        found, c = search("BYGG PARTNER AS", "AS", {"https://www.byggpartner.no/": other},
+                          subunits=[{"organisation_number": "995887606", "website": "www.byggpartner.no"}])
+        self.assertEqual((found["status"], c["value"]), ("not_available", None))
+        found, c = search("BYGG PARTNER AS", "AS", {"https://www.byggpartner.no/": other},
+                          subunits=[{"organisation_number": "998027160", "website": "www.byggpartner.no"}])
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+        # the company's own register site with another body's number: the website the register gives, not verified
+        found, c = search("BYGG PARTNER AS", "AS", {"https://www.bp-bygg.no/": other}, homepage="www.bp-bygg.no")
+        self.assertEqual((found["status"], found.get("unverified")), ("available", True))
+        self.assertIn("shows the organisation number 998027160 of another legal entity", c["note"])
+        # a register site whose domain spells the name stays its own whatever else its pages show
+        found, c = search("BYGG PARTNER AS", "AS", {"https://www.byggpartner.no/": other}, homepage="www.byggpartner.no")
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+        # a brand that is part of the legal name is no other company («Lunde AS» for LUNDE MVH AS)
+        brand = ("<html><head><title>Lunde - kommunikasjonshus</title></head><body>Lunde MVH. Øvre Flatåsveg 12, 7079 "
+                 "Flatåsen. © Lunde AS</body></html>")
+        found, c = search("LUNDE MVH AS", "AS", {"https://lundekom.no/": brand}, homepage="lundekom.no")
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+
+        # a site that 158 foundations list is their manager's: its texts and news are not any one foundation's
+        self.assertIn("unifor.no", SHARED_SITES)
+        manager = ("<html><head><title>Forvaltning av stiftelser | UNIFOR</title></head><body>UNIFOR forvalter Stiftelsen "
+                   "Holmen og Stiftelsen Vika.</body></html>")
+        found, c = search("STIFTELSEN HOLMEN", "STI", {"https://www.unifor.no/": manager}, homepage="www.unifor.no")
+        self.assertEqual((found["status"], found.get("unverified")), ("available", True))
+        self.assertIn("listed in the register by several legal entities", c["note"])
+        # a company of the group that presents itself on the shared site keeps it, though the domain is not its name
+        titled = manager.replace("Forvaltning av stiftelser | UNIFOR", "Unifor Forvaltning")
+        found, c = search("UNIFOR FORVALTNING AS", "AS", {"https://www.unifor.no/": titled + "Øvre Flatåsveg 12, 7079 x"},
+                          homepage="www.unifor.no")
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+        # the manager itself and a foundation whose number stands on the site keep it
+        found, c = search("UNIFOR AS", "AS", {"https://www.unifor.no/": manager}, homepage="www.unifor.no")
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+        numbered = manager.replace("</body>", " Org.nr 954 079 996</body>")
+        found, c = search("STIFTELSEN HOLMEN", "STI", {"https://www.unifor.no/": numbered}, homepage="www.unifor.no")
+        self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+
+    def test_profiles_from_structured_data(self):
+        from brierwise_signalpost.http import Response
+        from brierwise_signalpost.website import extract_site, find_website
+
+        class FakeClient:
+            def __init__(self, pages):
+                self.pages = pages
+
+            def get(self, url, **kw):
+                if url.endswith("/robots.txt"):
+                    return Response(url, url, 404)
+                if url in self.pages:
+                    return Response(url, url, 200, {"content-type": "text/html; charset=utf-8"},
+                                    self.pages[url].encode("utf-8"))
+                return Response(url, url, 404)
+
+        def profiles(item):
+            page = ("<html><head><title>Moss Autocenter</title><script type='application/ld+json'>%s</script></head>"
+                    "<body>Moss Autocenter AS. Org.nr 954 079 996</body></html>" % json.dumps(item))
+            client = FakeClient({"https://mossautocenter.no/": page})
+            env = Envelope("954079996", {})
+            env.legal_name = "MOSS AUTOCENTER AS"
+            entity = {"navn": "MOSS AUTOCENTER AS", "organisasjonsform": {"kode": "AS"}, "hjemmeside": "mossautocenter.no"}
+            found = find_website(client, env, entity, seconds=30)
+            self.assertEqual(found["status"], "available")
+            extract_site(client, env, found)
+            return sorted(c["value"]["url"] for c in env.claims if c["field"] == "company_profile")
+
+        other = {"@type": "Organization", "name": "Bilkompaniet",
+                 "sameAs": ["https://www.facebook.com/bilkompanietlillehammer",
+                            "https://www.instagram.com/mossautocenter/"]}
+        # an item about someone else: only the account that carries the company's own mark stays
+        self.assertEqual(profiles(other), ["https://www.instagram.com/mossautocenter"])
+        # the same links under the company's name are the company's word, also for a numeric Facebook page
+        own = dict(other, name="Moss Autocenter AS", sameAs=["https://www.facebook.com/bilkompanietlillehammer",
+                                                             "https://www.facebook.com/profile.php?id=61573477913453"])
+        self.assertEqual(profiles(own), ["https://www.facebook.com/bilkompanietlillehammer",
+                                         "https://www.facebook.com/profile.php?id=61573477913453"])
+
+    def test_a_place_in_the_name_is_no_mark_for_profiles(self):
+        from brierwise_signalpost.website import handle_matches, own_marks
+        env = Envelope("954079996", {})
+        env.legal_name = "STIFTINGA GLOPPEN MUSIKKFEST"
+        env.claim("legal_identity", "municipality", {"name": "GLOPPEN", "number": "4650"}, [])
+        env.claim("legal_identity", "business_address", "Sandane 4, 6823 SANDANE", [])
+        marks = own_marks(env, "gloppenmusikkfest.no")
+        self.assertEqual(marks, {"musikkfest", "gloppenmusikkfest"})
+        self.assertFalse(handle_matches("/kyrkjagloppen", marks))
+        self.assertTrue(handle_matches("/gloppenmusikkfest", marks))
+        self.assertTrue(handle_matches("/musikkfestengloppen", marks))
+        env.legal_name = "GLOPPEN AS"                 # a name that is only the place keeps it
+        self.assertIn("gloppen", own_marks(env, "gl-as.no"))
+        # words many names share are no marks either, unless the name has nothing else
+        env.legal_name = "OLSEN BYGG AS"
+        self.assertFalse(handle_matches("/byggmakker", own_marks(env, "ob.no")))
+        self.assertTrue(handle_matches("/olsenbygg", own_marks(env, "ob.no")))
+        env.legal_name = "STIFTELSEN TIL STØTTE FOR ALLMENNYTTIGE FORMÅL I TØNSBERG KOMMUNE"
+        env.claim("legal_identity", "municipality", {"name": "TØNSBERG", "number": "3905"}, [])
+        self.assertFalse(handle_matches("/tonsbergkommune", own_marks(env, "unifor.no")))
+        env.legal_name = "BYGG SERVICE AS"
+        self.assertIn("bygg", own_marks(env, "bs.no"))
+
+    def test_refresh_across_the_version_that_drops_other_entities_sites(self):
+        site = lambda url, **kw: claim("official_website", url, section="website_profiles", **kw)
+        none = claim("official_website", None, section="website_profiles", availability="not_available")
+        same_as = claim("company_profile", {"platform": "facebook", "url": "https://www.facebook.com/someone"},
+                        section="website_profiles", note="linked from the verified company website (JSON-LD sameAs)")
+        old = env_with([site("https://trondheimvvs.no/", note="the site names the company"), same_as])
+        for new in (env_with([none]), env_with([site("https://www.trondheimel.no/", note="organisation number")])):
+            old["run"]["agent_version"], new["run"]["agent_version"] = "0.8.1", "0.8.2"
+            observed = []
+            changes, history = compare(old, new, None, observed)
+            self.assertEqual(changes, [])
+            self.assertEqual({h["claim"]["field"] for h in history}, {"official_website", "company_profile"})
+        # within one version the same disappearance is a change of the company
+        gone = env_with([none])
+        old["run"]["agent_version"] = gone["run"]["agent_version"] = "0.8.2"
+        self.assertEqual(sorted(c["field"] for c in compare(old, gone)[0]), ["company_profile", "official_website"])
+        # a site that cannot be read now is no such case
+        failed = claim("official_website", None, section="website_profiles", availability="failed")
+        a, b = env_with([site("https://x.no/", note="n")]), env_with([failed])
+        a["run"]["agent_version"], b["run"]["agent_version"] = "0.8.1", "0.8.2"
+        carried = []
+        self.assertEqual(compare(a, b, carried)[0], [])
+        self.assertEqual(len(carried), 1)
+
+    def test_links_with_spaces_and_broken_answers(self):
+        import http.client
+        import io
+        from brierwise_signalpost.http import Client
+
+        client = Client(retries=0)
+        client._wait = lambda host: None
+        seen = []
+
+        class Answer(io.BytesIO):
+            status, headers = 200, {}
+
+            def geturl(self):
+                return seen[-1]
+
+        def opener(req, timeout=None):
+            seen.append(req.full_url)
+            return Answer(b"ok")
+
+        client._opener = type("O", (), {"open": staticmethod(opener)})
+        r = client.get("https://example.no/en/news/This is GravelBirken 100", check_url=False)
+        self.assertEqual((r.status, seen[-1]), (200, "https://example.no/en/news/This%20is%20GravelBirken%20100"))
+
+        def broken(req, timeout=None):
+            raise http.client.IncompleteRead(b"")
+
+        client._opener = type("O", (), {"open": staticmethod(broken)})
+        r = client.get("https://example.no/", check_url=False)
+        self.assertEqual(r.status, 0)
+        self.assertIn("network", r.error)
+
 
 if __name__ == "__main__":
     unittest.main()
