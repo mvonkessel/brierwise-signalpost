@@ -132,6 +132,7 @@ def fetch_roles(client, env: Envelope) -> list[dict]:
         env.error("official.roles", "invalid JSON: %s" % exc, url)
         return []
     found = []
+    withheld = 0
     for group in data.get("rollegrupper") or []:
         changed = (group.get("sistEndret") or "")[:10] or None
         for role in group.get("roller") or []:
@@ -141,11 +142,15 @@ def fetch_roles(client, env: Envelope) -> list[dict]:
             item = {"role_code": rtype.get("kode"), "role": rtype.get("beskrivelse")}
             person, unit = role.get("person"), role.get("enhet")
             if person:
-                if person.get("erDoed"):
-                    continue
+                # Since 0.8.3 no personal data: a person in a role is not published. The name stays inside this
+                # run only, to withhold it where the register or a website prints it (privacy.py).
                 n = person.get("navn") or {}
-                item.update(kind="person", name=_join([n.get("fornavn"), n.get("mellomnavn"), n.get("etternavn")]))
-            elif unit:
+                full = _join([n.get("fornavn"), n.get("mellomnavn"), n.get("etternavn")])
+                if full:
+                    env.person_names.add(full)
+                withheld += 1
+                continue
+            if unit:
                 item.update(kind="organisation", name=_join(unit.get("navn")),
                             organisation_number=unit.get("organisasjonsnummer"))
             else:
@@ -155,7 +160,8 @@ def fetch_roles(client, env: Envelope) -> list[dict]:
             found.append(dict(item, effective_date=changed))
     found.sort(key=lambda x: (ROLE_ORDER.index(x["role_code"]) if x["role_code"] in ROLE_ORDER else 99, x["name"]))
     if not found:
-        env.claim("leadership_workplaces", "roles", None, [env.cite(snap, "no active role holders")], "not_available")
+        span = "role holders who are persons are not published" if withheld else "no active role holders"
+        env.claim("leadership_workplaces", "roles", None, [env.cite(snap, span)], "not_available")
     for item in found:
         span = "%s: %s" % (item["role"], item["name"])
         env.claim("leadership_workplaces", "role", {k: v for k, v in item.items() if k != "effective_date"},

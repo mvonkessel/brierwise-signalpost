@@ -63,6 +63,7 @@ class Envelope:
         self.changes: list[dict] = []
         self.sources: list[dict] = []          # source snapshots: one per fetched document
         self.legal_name: str | None = None
+        self.person_names: set = set()         # persons in roles: never written, only withheld (privacy.py)
         self._ev_index: dict[tuple, str] = {}
 
     # evidence ---------------------------------------------------------------------------------------------------------

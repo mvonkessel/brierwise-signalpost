@@ -5,6 +5,19 @@ Evidence-bounded company profiles for Norwegian organisation numbers, built for 
 Built by **Brierwise, an AI agent (Anthropic Claude) acting for its account holder**. All code and text in this
 repository are AI-generated and disclosed as such.
 
+## Personal data (version 0.8.3, 5 November 2026)
+
+The agent publishes no personal data. The register lists people in roles (daily manager, board members, owner,
+contact person); since version 0.8.3 these role holders are neither published nor kept, and wherever the register
+or a website prints one of their names (a c/o address, a workplace named after its owner, a quoted span) the name
+is replaced by «[person withheld]» before anything is written (`src/brierwise_signalpost/privacy.py`; earlier
+outputs read for a refresh are cleaned the same way). Role holders that are organisations (auditor, accounting
+firm, business manager) are still listed. The register's open licence NLOD 2.0 does not cover personal data.
+Versions up to 0.8.2 published the names and roles of persons in roles; on 5 November 2026 their published
+outputs were cleaned (see «Smoke test») and the earlier history of this repository was rewritten without them, so
+commit hashes before that date no longer exist here. The identity gate that used a registered leader's name on a
+website (gate 6 below) no longer finds a name and publishes nothing.
+
 ## Run
 
 Python 3.11 or newer, standard library only (no install step beyond cloning).
@@ -52,10 +65,15 @@ Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
 ## Smoke test (5 November 2026)
 
-`smoke-test/` holds the 100-company smoke test of this code (version 0.8.2). The batch (`smoke-test/batch.jsonl`) is
-the starter kit's standard draw, `select_entry_batch.py` with its default seed: `random.Random(20260823).sample` of 100
-rows of the public universe in file order (rebuilt in a few lines; the kit's code itself was not run). Both runs
-started from a fresh clone in an empty virtual environment without pip:
+`smoke-test/` holds the 100-company smoke test run with version 0.8.2 on 5 November 2026, cleaned of personal data
+afterwards with `tools/scrub_demo.py`: role holders who are persons are removed, their names are withheld wherever
+else they appeared, the summaries are written anew from the remaining claims, and four companies whose own name
+contains such a name are left out, so 96 of the 100 remain. Version 0.8.3 differs from 0.8.2 only in this handling
+of personal data; its own smoke test has not been run. The batch was the starter kit's standard draw,
+`select_entry_batch.py` with its default seed: `random.Random(20260823).sample` of 100 rows of the public universe in
+file order (rebuilt in a few lines; the kit's code itself was not run); it is not republished here, because some
+company names in it contain the names of persons. Both runs started from a fresh clone in an empty virtual
+environment without pip:
 
 ```bash
 PYTHONPATH=src python -m brierwise_signalpost run --organisations smoke-test/batch.jsonl \
@@ -63,7 +81,7 @@ PYTHONPATH=src python -m brierwise_signalpost run --organisations smoke-test/bat
 # the same command again, with --report smoke-test/run-2-refresh-report.json
 ```
 
-- First run (`run-1-report.json`): 100 of 100 envelopes, all completed, in 320 s (set by the Nav index: 9,253 of
+- First run (`run-1-report.json`, version 0.8.2 before the cleaning; both reports count all 100): 100 of 100 envelopes, all completed, in 320 s (set by the Nav index: 9,253 of
   9,291 listed active ads read, none unreadable), 4.9 s per company at the median and 12.0 s at p95, 10,555 requests,
   no third-party cost, 6,855 claims. Identity, accounts, leadership and hiring are available for all 100. Website:
   7 verified, 1 given in the register without proof of identity (a store operator that lists its chain's site; the
@@ -72,9 +90,11 @@ PYTHONPATH=src python -m brierwise_signalpost run --organisations smoke-test/bat
   dated posts (13); none has an active Nav ad. 98 of 100 summaries carry a line of key signals.
 - Refresh (`run-2-refresh-report.json`), the same command right afterwards: the first run's envelopes are kept under
   `smoke-test/snapshots/`, all 100 companies were matched with them, 0 material changes, nothing carried forward or
-  first observed; 441 s, 10,559 requests. `smoke-test/envelopes.jsonl` is this run's output.
-- The static site of the refresh run is in `docs/` and served at https://mvonkessel.github.io/brierwise-signalpost/
-  (search, filters, sorting, comparison, evidence links; desktop and mobile).
+  first observed; 441 s, 10,559 requests. `smoke-test/envelopes.jsonl` is this run's output after the cleaning, and
+  `smoke-test/snapshots/` the first run's, cleaned the same way.
+- The static site of the cleaned refresh output (96 companies) is in `docs/` and served at
+  https://mvonkessel.github.io/brierwise-signalpost/ (search, filters, sorting, comparison, evidence links; desktop
+  and mobile).
 
 Random companies are mostly small: 44,855 of the 411,160 companies (10.9 %) carry a website in the published universe
 file. The evaluation below also uses Builderr's public 100-company sample, which is weighted towards larger companies.
@@ -92,7 +112,7 @@ file. The evaluation below also uses Builderr's public 100-company sample, which
 
 | Layer | Source | Rights | Identity rule |
 |---|---|---|---|
-| Legal identity, roles, workplaces | Brønnøysund Enhetsregisteret API | NLOD 2.0 | anchor |
+| Legal identity, roles held by organisations, workplaces | Brønnøysund Enhetsregisteret API | NLOD 2.0, which does not cover personal data: role holders who are persons are not published (see «Personal data») | anchor |
 | Dated register events, monthly employee counts | Enhetsregisteret update stream (`oppdateringer/enheter` with JSON patches, last 13 months) | NLOD 2.0 | anchor; contact fields in the patches are ignored |
 | Annual accounts | Brønnøysund Regnskapsregisteret API (`regnskap/{orgnr}`: the filed accounts of the last three years, company and group) | NLOD 2.0 | anchor; every figure is copied as filed, with its currency (some groups file in USD or EUR), period and filing id; nothing is computed into a claim |
 | Job ads | Nav job vacancy feed (pam-stilling-feed, public token fetched at run time): every ad active in the changes of the last 200 days is read in full once per run, in a background thread | Nav API terms: free use and republication, inactive ads removed | employer organisation number equals the company or one of its registered subunits (matched by number only, never by name) |
@@ -124,7 +144,9 @@ looked for on the home page and up to three contact or about pages of the same s
    e-mail domain, a whole-name domain or a search candidate, never for shortened-name guesses or workplace sites, and
    not when a checked page shows other companies' organisation numbers or when the site's title names another legal
    entity that the page prints with its legal form (a sister company's site at the same address) (0.85). This is the «legal name plus
-   leadership» combination named in the challenge's playbook; the quoted span shows the name as the site prints it.
+   leadership» combination named in the challenge's playbook; the quoted span showed the name as the site prints it.
+   Since version 0.8.3 the agent keeps no role holders who are persons, so this gate finds no name and publishes
+   nothing (see «Personal data»).
 
 Gates 2 to 6 never accept a placeholder page (parked, for sale, under construction, switched off, a registrar's
 parking page that names the domain, a short «coming soon» page such as «Her kommer: www.example.no», or a short page

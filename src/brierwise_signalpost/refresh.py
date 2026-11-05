@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 
 from .official import ACCOUNT_FIELDS as _ACCOUNTS
+from .privacy import scrub
 from .website import profile_url
 
 # field -> how to identify one fact inside a multi-valued field (None: single-valued field)
@@ -190,5 +191,6 @@ def load_previous(path: str | None) -> dict:
             line = line.strip()
             if line:
                 env = json.loads(line)
+                scrub(env)                # outputs up to 0.8.2 still name persons in roles
                 prev[env["organisation_number"]] = env
     return prev

@@ -15,6 +15,7 @@ from .http import Client, now_iso
 from .model import Envelope, SECTIONS, valid_orgnr
 from .jobs import NavIndex, jobs
 from .official import official
+from .privacy import scrub
 from .refresh import carry_forward, compare, load_previous
 from .synthesis import synthesize, with_changes
 from .website import extract_site, find_website
@@ -150,6 +151,7 @@ def close(env: Envelope, cc: CountingClient, status: str, seconds: float) -> dic
         out["synthesis"] = {"sentences": [], "error": "%s: %s" % (type(exc).__name__, exc)}
     out["operations"] = {"requests": cc.requests, "runtime_ms": int(seconds * 1000),
                          "third_party_cost_usd": round(getattr(env, "cost_usd", 0.0), 4)}
+    out["_person_names"] = sorted(getattr(env, "person_names", ()))   # removed again before writing
     return out
 
 
@@ -201,6 +203,7 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
                               "material_changes": len(env["changes"]), "first_run": p is None,
                               "carried_forward": len(carried), "first_observed": len(observed),
                               "first_observed_reasons": dict(Counter(x["reason"] for x in observed))}
+            scrub(env, env.pop("_person_names", None))     # no personal data in the output (privacy.py)
             with lock:
                 done[o] = env
                 ck.write(json.dumps(env, ensure_ascii=False) + "\n")

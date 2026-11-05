@@ -658,7 +658,8 @@ LEADER_ORIGINS = {"registry_listed", "nav_employer_homepage", "email_domain", "n
 
 
 def leaders_of(env: Envelope) -> list[tuple[str, str]]:
-    """(full name, role code) of the registered daily manager and chair, from this envelope's role claims."""
+    """(full name, role code) of the registered daily manager and chair, from this envelope's role claims. Since
+    0.8.3 the agent writes no role holders who are persons, so this proof finds none (privacy.py)."""
     out = []
     for c in env.claims:
         v = c.get("value")
