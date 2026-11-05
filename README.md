@@ -185,9 +185,10 @@ Quoted evidence spans are exact substrings of the page text and stop short of e-
 - Person data is used only in the company-centric role context: name and function of officers as published by the
   register. Dates of birth, registered phone numbers and e-mail addresses are not read into claims. Contact persons
   in job ads are not used.
-- Social profiles are published only when the verified company site links them (JSON-LD `sameAs` of an item that names
-  the company, or any `sameAs` or outbound link on the home page or its first contact or about page whose account name
-  contains a word of the company name or the site's domain label; a three-letter word counts only as the whole account
+- Social profiles are published only when the verified company site links them (a JSON-LD `sameAs` or an outbound link
+  on the home page or its first contact or about page whose account name contains a word of the company name or the
+  site's domain label, or a `sameAs` account that is only a number in an item that names the company; a three-letter
+  word counts only as the whole account
   name, so that «KaiHenningMelberg» is not taken for «KAI MARKETING AS», and the company's municipality or post town
   does not count when the name has other words, nor do words many names share such as «kommune» or «bygg», so that the
   church page «kyrkjagloppen» is not taken for STIFTINGA GLOPPEN MUSIKKFEST), at most two accounts per platform, the same account only once whatever scheme, host

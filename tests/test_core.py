@@ -832,11 +832,13 @@ class Core(unittest.TestCase):
                             "https://www.instagram.com/mossautocenter/"]}
         # an item about someone else: only the account that carries the company's own mark stays
         self.assertEqual(profiles(other), ["https://www.instagram.com/mossautocenter"])
-        # the same links under the company's name are the company's word, also for a numeric Facebook page
-        own = dict(other, name="Moss Autocenter AS", sameAs=["https://www.facebook.com/bilkompanietlillehammer",
-                                                             "https://www.facebook.com/profile.php?id=61573477913453"])
-        self.assertEqual(profiles(own), ["https://www.facebook.com/bilkompanietlillehammer",
-                                         "https://www.facebook.com/profile.php?id=61573477913453"])
+        # under the company's own name a numeric account is taken at its word, an account of another name is not
+        # (r8.no: the site's name with a theme vendor's accounts)
+        own = dict(other, name="Moss Autocenter AS", sameAs=["https://www.facebook.com/adornthemes",
+                                                             "https://www.facebook.com/profile.php?id=61573477913453",
+                                                             "https://www.linkedin.com/company/42884882"])
+        self.assertEqual(profiles(own), ["https://www.facebook.com/profile.php?id=61573477913453",
+                                         "https://www.linkedin.com/company/42884882"])
 
     def test_a_place_in_the_name_is_no_mark_for_profiles(self):
         from brierwise_signalpost.website import handle_matches, own_marks

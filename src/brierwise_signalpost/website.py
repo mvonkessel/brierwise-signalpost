@@ -578,6 +578,10 @@ GENERIC_MARKS = {"kommune", "kommunen", "fylke", "fylkeskommune", "kirke", "kirk
                  "stotte", "formal", "forening"}
 
 
+# Accounts that are only a number: nothing in the address can carry a company's name.
+OPAQUE_ACCOUNT = re.compile(r"profile\.php\?id=\d+|/company/\d+/?$|/channel/UC[\w-]+")
+
+
 def own_marks(env: Envelope, host: str) -> set:
     """Words a profile address of this company should carry: its name words and the site's domain label. The place
     in a name is not one of them when the name has other words: facebook.com/kyrkjagloppen, the church of Gloppen, is
@@ -1049,12 +1053,14 @@ def extract_site(client, env: Envelope, found: dict) -> dict:
     for it in items:
         same = it.get("sameAs")
         # structured data can be a template's leftovers: mossautocenter.no describes an organisation «Bilkompaniet»
-        # with the Facebook page of a dealer in Lillehammer. The item must name the company, or the account must.
+        # with the Facebook page of a dealer in Lillehammer, and r8.no gives its own name with a theme vendor's accounts.
+        # The account must carry a mark of the company; one that is only a number needs an item naming the company.
         own = isinstance(it.get("name"), str) and names_in(fold(it["name"]), env.legal_name or "")
         for s in (same if isinstance(same, list) else [same]):
             if isinstance(s, str):
                 for plat, rx in SOCIAL.items():
-                    if rx.match(s) and (own or handle_matches(fold(urlsplit(profile_url(s)).path), marks)):
+                    if rx.match(s) and (handle_matches(fold(urlsplit(profile_url(s)).path), marks) or
+                                        (own and OPAQUE_ACCOUNT.search(s))):
                         keep(plat, s, "JSON-LD sameAs", snap)
     pages = [(page, snap, "outbound link on the company site")]
     for link, text in page.links:

@@ -233,7 +233,10 @@ def run_batch(organisations: str, output: str, report: str, run_id: str, workers
             fh.write(json.dumps(done[o], ensure_ascii=False) + "\n")
     os.replace(tmp, output)
     if os.path.exists(checkpoint):
-        os.remove(checkpoint)
+        try:
+            os.remove(checkpoint)
+        except OSError:                                # another process holds it: the run itself is complete
+            pass
     rt = sorted(done[o]["operations"]["runtime_ms"] for o in orgs) or [0]
     sections = {s: Counter(done[o]["sections"].get(s, "missing") for o in orgs) for s in SECTIONS}
     rep = {
