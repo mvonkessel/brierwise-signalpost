@@ -696,7 +696,7 @@ def titled_entity(page: Page, text: str, legal_name: str) -> str | None:
 
 
 # «© 2026 Trondheim VVS AS», «Copyright Olsen & Sønn AS»: the name a site's copyright line gives, with its legal form.
-COPYRIGHT = re.compile(r"(?:©|\((?i:c)\)|(?i:copyright))\s*(?:©\s*)?(?:\d{4}\s*(?:[-–]\s*\d{4}\s*)?)?"
+COPYRIGHT = re.compile(r"(?:(?:©|\((?i:c)\)|(?i:copyright))\s*)+(?:\d{4}\s*(?:[-–]\s*\d{4}\s*)?)?"
                        r"([^\W\d][^|·•©,:;(\n]{1,60}?)\s+(?:AS|ASA|ANS|DA|SA)\b")
 
 

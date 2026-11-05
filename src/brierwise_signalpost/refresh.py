@@ -109,6 +109,7 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None, observed:
         _site_value(prev) != _site_value(cur)))
     why_version = "a newer agent version classifies the register's website differently (identity not verified)"
     changes, history = [], []
+    replaced = {new[k]["value"].get("platform") for k in new if k[0] == "company_profile" and k not in old}
     for key in sorted(set(old) | set(new), key=str):
         a, b = old.get(key), new.get(key)
         field = key[0]
@@ -145,7 +146,8 @@ def compare(prev: dict | None, cur: dict, carried: list | None = None, observed:
                 carried.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],
                                 "run_id": prev.get("run", {}).get("run_id"), "failed_source": SOURCE_OF[field]})
                 continue                      # not re-checked in this run: kept, not removed
-            dropped = not same_version and field == "company_profile" and "sameAs" in (a.get("note") or "")
+            # a newer version's stricter profile rule, unless another account of that platform came instead
+            dropped = not same_version and field == "company_profile" and a["value"].get("platform") not in replaced
             if field in ACCOUNT_FIELDS or field in DATED or dropped or (reclassified and
                                                                         SOURCE_OF.get(field) == "official_website"):
                 history.append({"claim": a, "evidence": [pev[i] for i in a["evidence_ids"] if i in pev],

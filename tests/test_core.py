@@ -745,6 +745,11 @@ class Core(unittest.TestCase):
         found, c = search("TRONDHEIM EL AS", "AS", {"https://www.trondheimvvs.no/": footer.replace("VVS AS", "El AS")},
                           subunits=unit)
         self.assertEqual((found["status"], found.get("unverified")), ("available", None))
+        from brierwise_signalpost.website import COPYRIGHT
+        self.assertEqual(COPYRIGHT.search("Copyright © 2025 Global Ocean Technology AS Levert av").group(1),
+                         "Global Ocean Technology")
+        self.assertEqual(COPYRIGHT.search("© Copyright 2020-2026 Olavia Media AS").group(1), "Olavia Media")
+        self.assertIsNone(COPYRIGHT.search("Alle rettigheter forbeholdt Nordmann AS"))
 
         # the company's own number next to other companies' numbers is judged by the older rule, not as a rival's site
         both = ("<html><head><title>Bygg Partner</title></head><body>Bygg Partner AS. Org.nr 954 079 996. Foo AS "

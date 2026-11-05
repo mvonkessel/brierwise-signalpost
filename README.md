@@ -45,8 +45,8 @@ not a change of the company is not reported as one:
   the register gives the same update sometimes in local time and sometimes in UTC;
 - between two agent versions only the value fields both versions write are compared, and website facts that appear
   or disappear only because a newer version publishes a register site as «identity not verified» (or no longer
-  takes such a site's content), no longer takes a verified site for the company's own, or no longer takes a `sameAs`
-  profile, are counted under `refresh.first_observed` or kept in `history`, not reported as changes.
+  takes such a site's content), no longer takes a verified site for the company's own, or no longer takes a profile,
+  are counted under `refresh.first_observed` or kept in `history`, not reported as changes.
 
 Tests: `PYTHONPATH=src python -m unittest discover -s tests`.
 
